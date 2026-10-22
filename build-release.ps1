@@ -25,7 +25,7 @@ try {
     Invoke-FlutterRelease $runner @('analyze','lib','test')
     Invoke-FlutterRelease $runner @('test')
   }
-  if (-not $SkipBuild) { Invoke-FlutterRelease $runner @('build','windows','--release') }
+  if (-not $SkipBuild) { Invoke-FlutterRelease $runner @('build','windows','--release',"--dart-define=APP_VERSION=$Version") }
   $packageName = "SuperClipboard-Windows-x64-v$Version"
   & (Join-Path $PSScriptRoot 'package.ps1') -SkipBuild -PackageName $packageName
   if (-not $?) { throw '免安装包生成失败。' }

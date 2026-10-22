@@ -120,7 +120,8 @@ PlatformBridge::PlatformBridge(flutter::BinaryMessenger* messenger, HWND window,
     "superclipboard/platform", &flutter::StandardMethodCodec::GetInstance());
   if (mode != "main") {
     SetWindowLongPtr(window_, GWL_EXSTYLE, (GetWindowLongPtr(window_, GWL_EXSTYLE) | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW);
-    SetWindowLongPtr(window_, GWL_STYLE, WS_POPUP | WS_THICKFRAME | WS_CLIPCHILDREN);
+    SetWindowLongPtr(window_, GWL_STYLE, WS_POPUP | WS_THICKFRAME | WS_CLIPCHILDREN |
+      (mode == "transfer" ? WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU : 0));
     SetWindowPos(window_, mode == "transfer" ? HWND_TOPMOST : HWND_TOP, 0, 0, 0, 0,
       SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED | SWP_NOACTIVATE);
   } else {
@@ -170,6 +171,24 @@ PlatformBridge::PlatformBridge(flutter::BinaryMessenger* messenger, HWND window,
       result->Success(Value(map && clipboard_native::Write(window_, *map)));
     } else if (method == "show") {
       if (args && std::holds_alternative<std::string>(*args)) ShowWindowForMode(std::get<std::string>(*args));
+      result->Success();
+    } else if (method == "setWindowStyle") {
+      windows_style_ = !args || !std::holds_alternative<std::string>(*args) || std::get<std::string>(*args) != "mac";
+      if (!windows_style_ && mode_ != "popover") {
+        if (IsZoomed(window_)) ShowWindow(window_, SW_RESTORE);
+        RECT rect; GetWindowRect(window_, &rect);
+        const int width = static_cast<int>((mode_ == "main" ? 460 : 390) * GetDpiForWindow(window_) / 96.0);
+        if (rect.right - rect.left > width) SetWindowPos(window_, nullptr, 0, 0, width, rect.bottom - rect.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+      }
+      result->Success(Value(IsZoomed(window_) != FALSE));
+    } else if (method == "windowMenu") {
+      POINT cursor; GetCursorPos(&cursor);
+      HMENU menu = GetSystemMenu(window_, FALSE);
+      const bool zoomed = IsZoomed(window_) != FALSE;
+      EnableMenuItem(menu, SC_RESTORE, MF_BYCOMMAND | (zoomed ? MF_ENABLED : MF_GRAYED));
+      EnableMenuItem(menu, SC_MAXIMIZE, MF_BYCOMMAND | (zoomed ? MF_GRAYED : MF_ENABLED));
+      const auto command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, cursor.x, cursor.y, 0, window_, nullptr);
+      if (command) PostMessage(window_, WM_SYSCOMMAND, command, 0);
       result->Success();
     } else if (method == "windowAction") {
       if (args && std::holds_alternative<std::string>(*args)) {
@@ -328,13 +347,25 @@ std::optional<LRESULT> PlatformBridge::Handle(UINT message, WPARAM wp, LPARAM lp
     case WM_ACTIVATE:
       if (mode_ == "popover" && LOWORD(wp) == WA_INACTIVE) Hide();
       break;
+    case WM_SIZE:
+      if (ready_ && wp != SIZE_MINIMIZED) Notify("windowState", Value(IsZoomed(window_) != FALSE));
+      break;
     case WM_GETMINMAXINFO: {
       auto info = reinterpret_cast<MINMAXINFO*>(lp);
-      double scale = GetDpiForWindow(window_) / 96.0;
+      const double scale = GetDpiForWindow(window_) / 96.0;
       info->ptMinTrackSize = {static_cast<LONG>((mode_ == "transfer" ? 320 : mode_ == "popover" ? 390 : 420) * scale), static_cast<LONG>((mode_ == "transfer" ? 360 : mode_ == "popover" ? 520 : 440) * scale)};
-      info->ptMaxTrackSize.x = static_cast<LONG>((mode_ == "main" ? 460 : 390) * scale);
-      info->ptMaxSize.x = info->ptMaxTrackSize.x;
-      if (mode_ == "popover") info->ptMaxSize.y = info->ptMaxTrackSize.y = static_cast<LONG>(520 * scale);
+      if (mode_ == "popover") {
+        info->ptMaxSize.x = info->ptMaxTrackSize.x = static_cast<LONG>(390 * scale);
+        info->ptMaxSize.y = info->ptMaxTrackSize.y = static_cast<LONG>(520 * scale);
+      } else if (!windows_style_) {
+        info->ptMaxSize.x = info->ptMaxTrackSize.x = static_cast<LONG>((mode_ == "main" ? 460 : 390) * scale);
+      } else {
+        MONITORINFO monitor{sizeof(monitor)};
+        if (GetMonitorInfo(MonitorFromWindow(window_, MONITOR_DEFAULTTONEAREST), &monitor)) {
+          info->ptMaxPosition = {monitor.rcWork.left - monitor.rcMonitor.left, monitor.rcWork.top - monitor.rcMonitor.top};
+          info->ptMaxSize = {monitor.rcWork.right - monitor.rcWork.left, monitor.rcWork.bottom - monitor.rcWork.top};
+        }
+      }
       return 0;
     }
     case WM_NCCALCSIZE:

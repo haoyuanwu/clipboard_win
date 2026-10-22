@@ -2,6 +2,10 @@ part of 'app.dart';
 
 /// Values transcribed from ClipboardLayout, ClipboardTheme and the SwiftUI scenes.
 abstract final class ReplicaMetrics {
+  static const appVersion = String.fromEnvironment(
+    'APP_VERSION',
+    defaultValue: '1.2.1',
+  );
   static const mainSize = Size(440, 640);
   static const popoverSize = Size(390, 520);
   static const transferSize = Size(350, 520);
@@ -277,7 +281,10 @@ class FrostedDialog extends StatelessWidget {
     backgroundColor: Colors.transparent,
     elevation: 0,
     insetPadding: insetPadding,
-    child: MacGlassSurface(radius: 16, child: child),
+    child: MacGlassSurface(
+      radius: WindowStyleScope.isWindows(context) ? 8 : 16,
+      child: child,
+    ),
   );
 }
 

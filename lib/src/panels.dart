@@ -27,11 +27,13 @@ class PanelHeader extends StatelessWidget {
         ),
         const Spacer(),
         ToolButton(
-          CupertinoIcons.xmark_circle_fill,
+          WindowStyleScope.isWindows(context)
+              ? Icons.close
+              : CupertinoIcons.xmark_circle_fill,
           '关闭',
           close,
           size: 20,
-          iconSize: 20,
+          iconSize: WindowStyleScope.isWindows(context) ? 12 : 20,
           color: secondary(context),
         ),
       ],
@@ -538,6 +540,13 @@ class SettingsPanel extends StatelessWidget {
                       ),
                     ]),
                     _section(context, '外观', [
+                      _select(
+                        context,
+                        '标题栏样式',
+                        store.settings['titleBarStyle'] ?? 'windows',
+                        {'windows': 'Windows', 'mac': 'macOS'},
+                        (v) => store.setting('titleBarStyle', v),
+                      ),
                       _select(context, '显示模式', store.settings['appearance'], {
                         'light': '浅色',
                         'dark': '深色',

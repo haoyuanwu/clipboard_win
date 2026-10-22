@@ -16,6 +16,7 @@ import 'rtf_preview.dart';
 part 'panels.dart';
 part 'cards.dart';
 part 'mac_controls.dart';
+part 'windows_controls.dart';
 
 class SuperClipboardApp extends StatelessWidget {
   const SuperClipboardApp({super.key, required this.store});
@@ -33,15 +34,19 @@ class SuperClipboardApp extends StatelessWidget {
       },
       theme: _theme(Brightness.light),
       darkTheme: _theme(Brightness.dark),
-      builder: (context, child) => store.mode == 'main'
-          ? child!
-          : NativeGlassHost(
-              enabled: store.usePlatform,
-              child: MacGlassSurface(
-                transfer: store.mode == 'transfer',
-                child: child!,
+      builder: (context, child) => WindowChromeHost(
+        store: store,
+        windows: store.windowsStyle,
+        child: store.mode == 'main'
+            ? child!
+            : NativeGlassHost(
+                enabled: store.usePlatform,
+                child: MacGlassSurface(
+                  transfer: store.mode == 'transfer',
+                  child: child!,
+                ),
               ),
-            ),
+      ),
       home: ClipboardHome(store: store),
     ),
   );
@@ -401,84 +406,131 @@ class _ClipboardHomeState extends State<ClipboardHome> {
         : null,
     child: child,
   );
+  Widget _windowsToolbar(BuildContext context) => SizedBox(
+    height: 44,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Row(
+        children: [
+          Expanded(child: _searchField(context)),
+          const SizedBox(width: 8),
+          ToolButton(
+            library == 'notebook' ? Icons.menu_book : Icons.menu_book_outlined,
+            library == 'notebook' ? '返回剪贴板历史' : '记事本',
+            () =>
+                _switchLibrary(library == 'notebook' ? 'history' : 'notebook'),
+            selected: library == 'notebook',
+            size: 30,
+            iconSize: 16,
+          ),
+          const SizedBox(width: 4),
+          ToolButton(
+            Icons.drive_file_move_outline,
+            '悬浮中转',
+            () => _open('transfer'),
+            size: 30,
+            iconSize: 16,
+          ),
+          const SizedBox(width: 4),
+          ToolButton(
+            Icons.settings_outlined,
+            '设置',
+            _settings,
+            size: 30,
+            iconSize: 16,
+          ),
+          const SizedBox(width: 4),
+          ToolButton(Icons.info_outline, '关于', _about, size: 30, iconSize: 16),
+        ],
+      ),
+    ),
+  );
   Widget _mainHeader(BuildContext context) => ColoredBox(
     color: header(context),
     child: Column(
       children: [
-        Stack(
-          children: [
-            _drag(
-              SizedBox(
-                height: ReplicaMetrics.titleHeight,
-                child: Padding(
-                  padding: const EdgeInsets.only(left: 78, right: 12),
-                  child: Row(
-                    children: [
-                      if (expanded)
-                        Expanded(child: _searchField(context, collapse: true))
-                      else ...[
-                        Text(
-                          library == 'notebook' ? '记事本' : '剪贴板',
-                          maxLines: 1,
-                          style: const TextStyle(
-                            fontFamily: ReplicaMetrics.fontFamily,
-                            fontFamilyFallback: ReplicaMetrics.fontFallback,
-                            fontSize: 14,
-                            height: 1.2,
-                            fontWeight: FontWeight.w600,
+        if (store.windowsStyle) ...[
+          WindowsTitleBar(
+            title: '${library == 'notebook' ? '记事本' : '剪贴板'} - SuperClipboard',
+            enabled: store.usePlatform,
+            maximized: store.windowMaximized,
+          ),
+          _windowsToolbar(context),
+        ] else
+          Stack(
+            children: [
+              _drag(
+                SizedBox(
+                  height: ReplicaMetrics.titleHeight,
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 78, right: 12),
+                    child: Row(
+                      children: [
+                        if (expanded)
+                          Expanded(child: _searchField(context, collapse: true))
+                        else ...[
+                          Text(
+                            library == 'notebook' ? '记事本' : '剪贴板',
+                            maxLines: 1,
+                            style: const TextStyle(
+                              fontFamily: ReplicaMetrics.fontFamily,
+                              fontFamilyFallback: ReplicaMetrics.fontFallback,
+                              fontSize: 14,
+                              height: 1.2,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
+                          const Spacer(),
+                          ToolButton(CupertinoIcons.search, '展开搜索', () {
+                            setState(() => expanded = true);
+                            searchFocus.requestFocus();
+                          }, size: 30),
+                        ],
+                        const SizedBox(width: 8),
+                        ToolButton(
+                          library == 'notebook'
+                              ? CupertinoIcons.book_fill
+                              : CupertinoIcons.book,
+                          library == 'notebook' ? '返回剪贴板历史' : '记事本',
+                          () => _switchLibrary(
+                            library == 'notebook' ? 'history' : 'notebook',
+                          ),
+                          selected: library == 'notebook',
+                          size: 30,
                         ),
-                        const Spacer(),
-                        ToolButton(CupertinoIcons.search, '展开搜索', () {
-                          setState(() => expanded = true);
-                          searchFocus.requestFocus();
-                        }, size: 30),
+                        const SizedBox(width: 8),
+                        ToolButton(
+                          CupertinoIcons.tray_full,
+                          '悬浮中转',
+                          () => _open('transfer'),
+                          size: 30,
+                        ),
+                        const SizedBox(width: 8),
+                        ToolButton(
+                          CupertinoIcons.gear,
+                          '设置',
+                          _settings,
+                          size: 30,
+                        ),
+                        const SizedBox(width: 8),
+                        ToolButton(
+                          CupertinoIcons.info_circle,
+                          '关于',
+                          _about,
+                          size: 30,
+                        ),
                       ],
-                      const SizedBox(width: 8),
-                      ToolButton(
-                        library == 'notebook'
-                            ? CupertinoIcons.book_fill
-                            : CupertinoIcons.book,
-                        library == 'notebook' ? '返回剪贴板历史' : '记事本',
-                        () => _switchLibrary(
-                          library == 'notebook' ? 'history' : 'notebook',
-                        ),
-                        selected: library == 'notebook',
-                        size: 30,
-                      ),
-                      const SizedBox(width: 8),
-                      ToolButton(
-                        CupertinoIcons.tray_full,
-                        '悬浮中转',
-                        () => _open('transfer'),
-                        size: 30,
-                      ),
-                      const SizedBox(width: 8),
-                      ToolButton(
-                        CupertinoIcons.gear,
-                        '设置',
-                        _settings,
-                        size: 30,
-                      ),
-                      const SizedBox(width: 8),
-                      ToolButton(
-                        CupertinoIcons.info_circle,
-                        '关于',
-                        _about,
-                        size: 30,
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               ),
-            ),
-            Positioned(
-              left: 0,
-              top: 0,
-              child: MacWindowControls(enabled: store.usePlatform),
-            ),
-          ],
-        ),
+              Positioned(
+                left: 0,
+                top: 0,
+                child: MacWindowControls(enabled: store.usePlatform),
+              ),
+            ],
+          ),
         Container(
           height: ReplicaMetrics.filterHeight,
           decoration: BoxDecoration(
@@ -575,7 +627,11 @@ class _ClipboardHomeState extends State<ClipboardHome> {
         child: Row(
           children: [
             const SizedBox(width: 9),
-            Icon(CupertinoIcons.search, size: 14, color: secondary(context)),
+            Icon(
+              store.windowsStyle ? Icons.search : CupertinoIcons.search,
+              size: 14,
+              color: secondary(context),
+            ),
             Expanded(
               child: TextField(
                 controller: search,
@@ -715,75 +771,98 @@ class _ClipboardHomeState extends State<ClipboardHome> {
       ),
     ),
   );
-  Widget _transferHeader(BuildContext context) => MacGlassSurface(
-    strip: true,
-    radius: 0,
-    transfer: true,
-    child: Stack(
-      children: [
-        _drag(
-          SizedBox(
-            height: 44,
-            child: Padding(
-              padding: const EdgeInsets.only(left: 78, right: 12),
-              child: Row(
-                children: [
-                  Icon(
-                    CupertinoIcons.tray_full_fill,
-                    size: 14,
-                    color: accent(context),
-                  ),
-                  const SizedBox(width: 7),
-                  const Text(
-                    '中转站',
-                    style: TextStyle(
-                      fontFamily: ReplicaMetrics.fontFamily,
-                      fontFamilyFallback: ReplicaMetrics.fontFallback,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(width: 7),
-                  Text(
-                    '${store.transfer.length}',
-                    style: TextStyle(
-                      fontFamily: ReplicaMetrics.fontFamily,
-                      fontFamilyFallback: ReplicaMetrics.fontFallback,
-                      fontSize: 11,
-                      color: secondary(context),
-                    ),
-                  ),
-                  const Spacer(),
-                  ToolButton(
-                    CupertinoIcons.trash,
-                    '清空中转站',
-                    store.busy || store.transfer.isEmpty
-                        ? null
-                        : () => _clear('transfer'),
-                    size: 28,
-                  ),
-                  const SizedBox(width: 7),
-                  ToolButton(
-                    CupertinoIcons.xmark,
-                    '关闭中转站',
-                    store.usePlatform
-                        ? () => WindowsBridge.call('hide')
-                        : () {},
-                    size: 28,
-                  ),
-                ],
-              ),
+  Widget _transferHeader(BuildContext context) => store.windowsStyle
+      ? MacGlassSurface(
+          strip: true,
+          radius: 0,
+          transfer: true,
+          child: WindowsTitleBar(
+            title: '中转站 · ${store.transfer.length}',
+            enabled: store.usePlatform,
+            maximized: store.windowMaximized,
+            trailing: ToolButton(
+              Icons.delete_outline,
+              '清空中转站',
+              store.busy || store.transfer.isEmpty
+                  ? null
+                  : () => _clear('transfer'),
+              size: 28,
+              iconSize: 16,
             ),
           ),
-        ),
-        Positioned(
-          left: 0,
-          top: 0,
-          child: MacWindowControls(enabled: store.usePlatform, transfer: true),
-        ),
-      ],
-    ),
-  );
+        )
+      : MacGlassSurface(
+          strip: true,
+          radius: 0,
+          transfer: true,
+          child: Stack(
+            children: [
+              _drag(
+                SizedBox(
+                  height: 44,
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 78, right: 12),
+                    child: Row(
+                      children: [
+                        Icon(
+                          CupertinoIcons.tray_full_fill,
+                          size: 14,
+                          color: accent(context),
+                        ),
+                        const SizedBox(width: 7),
+                        const Text(
+                          '中转站',
+                          style: TextStyle(
+                            fontFamily: ReplicaMetrics.fontFamily,
+                            fontFamilyFallback: ReplicaMetrics.fontFallback,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(width: 7),
+                        Text(
+                          '${store.transfer.length}',
+                          style: TextStyle(
+                            fontFamily: ReplicaMetrics.fontFamily,
+                            fontFamilyFallback: ReplicaMetrics.fontFallback,
+                            fontSize: 11,
+                            color: secondary(context),
+                          ),
+                        ),
+                        const Spacer(),
+                        ToolButton(
+                          CupertinoIcons.trash,
+                          '清空中转站',
+                          store.busy || store.transfer.isEmpty
+                              ? null
+                              : () => _clear('transfer'),
+                          size: 28,
+                        ),
+                        const SizedBox(width: 7),
+                        ToolButton(
+                          CupertinoIcons.xmark,
+                          '关闭中转站',
+                          store.usePlatform
+                              ? () => WindowsBridge.call('hide')
+                              : () {},
+                          size: 28,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                left: 0,
+                top: 0,
+                child: MacWindowControls(
+                  enabled: store.usePlatform,
+                  transfer: true,
+                ),
+              ),
+            ],
+          ),
+        );
   Widget _empty(BuildContext context) {
     final searching = search.text.isNotEmpty || category != null;
     return Center(
@@ -948,7 +1027,7 @@ class _ClipboardHomeState extends State<ClipboardHome> {
             ),
             const SizedBox(height: 12),
             Text(
-              'Windows 剪贴板历史管理 · 版本 1.2.0',
+              'Windows 剪贴板历史管理 · 版本 ${ReplicaMetrics.appVersion}',
               style: TextStyle(
                 fontFamily: ReplicaMetrics.fontFamily,
                 fontFamilyFallback: ReplicaMetrics.fontFallback,

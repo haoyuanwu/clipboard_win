@@ -1,3 +1,4 @@
+param([switch]$MacStyle)
 . (Join-Path $PSScriptRoot 'window_target.ps1')
 Add-Type @"
 using System;
@@ -25,7 +26,7 @@ if ($uiMain -eq [IntPtr]::Zero) {throw 'Main window missing'}
 $uiRect = New-Object ClipboardUi+RECT
 [ClipboardUi]::GetClientRect($uiMain,[ref]$uiRect) | Out-Null
 $uiWidth=$uiRect.right/([ClipboardUi]::GetDpiForWindow($uiMain)/96.0)
-[ClipboardUi]::Click($uiMain,($uiWidth-103),23)
+if($MacStyle){[ClipboardUi]::Click($uiMain,($uiWidth-103),23)}else{[ClipboardUi]::Click($uiMain,($uiWidth-95),54)}
 Start-Sleep -Milliseconds 1400
 $uiTransfer=(Get-ClipboardTestWindow '悬浮中转')
 if ($uiTransfer -eq [IntPtr]::Zero) {throw 'Transfer window missing'}

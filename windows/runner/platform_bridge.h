@@ -20,6 +20,7 @@ class PlatformBridge {
   HWND window_, view_;
   std::string mode_;
   bool ready_ = false;
+  bool windows_style_ = true;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel_;
   class DropTarget;
   DropTarget* drop_ = nullptr;

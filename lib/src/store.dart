@@ -28,6 +28,7 @@ class ClipboardStore extends ChangeNotifier {
   List<ClipEntry> history = [], notebook = [], transfer = [];
   Map<String, dynamic> settings = {
     'appearance': 'light',
+    'titleBarStyle': 'windows',
     'sort': 'time',
     'limit': 500,
     'startup': true,
@@ -36,6 +37,14 @@ class ClipboardStore extends ChangeNotifier {
   };
   String notebookPath = '', error = '';
   bool busy = false, dropTargeted = false;
+  bool windowMaximized = false;
+  bool get windowsStyle => settings['titleBarStyle'] != 'mac';
+  void setWindowMaximized(bool value) {
+    if (windowMaximized == value) return;
+    windowMaximized = value;
+    notifyListeners();
+  }
+
   int sessionRevision = 0;
   Timer? _cleanupTimer;
   DateTime? _transferDeadline;
@@ -78,6 +87,8 @@ class ClipboardStore extends ChangeNotifier {
     if (usePlatform) {
       WindowsBridge.channel.setMethodCallHandler((call) async {
         switch (call.method) {
+          case 'windowState':
+            setWindowMaximized(call.arguments == true);
           case 'state':
             _readSnapshot(Map<String, dynamic>.from(call.arguments));
             notifyListeners();

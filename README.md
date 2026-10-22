@@ -22,9 +22,11 @@
 
 ## 界面预览
 
+默认使用 Windows 标题栏，右侧依次为最小化、最大化/还原和关闭。可在 **设置 → 外观 → 标题栏样式** 中切换为 macOS，立即生效并保存选择；主窗口和中转站同步切换。
+
 以下为使用示例数据的 Windows 界面，非 macOS 原版截图。
 
-<img src="docs/screenshots/main-light.png" width="320" alt="浅色剪贴板历史"> <img src="docs/screenshots/main-dark.png" width="320" alt="深色剪贴板历史">
+<img src="docs/screenshots/windows-style-light.png" width="320" alt="浅色剪贴板历史"> <img src="docs/screenshots/windows-style-dark.png" width="320" alt="深色剪贴板历史">
 
 ## 主要功能
 

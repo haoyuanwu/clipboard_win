@@ -2,7 +2,9 @@
 
 参考 `reference/SuperClipboard` 提交 `0739f49d1494a69b46a041258efe0204fa5d13d2`，数值来自 ContentView、ClipboardUI、ClipboardTheme、ClipboardTextAppearance、PopoverGlassSurface 和 SwiftUI 窗口场景。以下单位均为逻辑像素。
 
-| 部位 | 原项目参数与 Windows 对应值 |
+下表描述可选 macOS 模式的原版对照。Windows 模式作为默认值，采用 32 高标题栏、右侧 3 个 46×32 按钮、独立 44 高工具栏；分类栏和卡片尺寸相同，首卡位置为 (16,134)。主窗口和中转站允许完整最大化，切回 macOS 后恢复原版宽度限制。
+
+| 部位 | 原项目参数与 macOS 模式对应值 |
 | --- | --- |
 | 主窗口 | 440×640；宽度范围 420–460；最小高度 440 |
 | 顶部 | 标题栏高 46；窗口按钮区域宽 78；工具按钮 30、间距 8；分类栏高 42 |
@@ -20,3 +22,5 @@
 按用户最新要求，所有现有透明表面改为统一半透明磨砂：浅色蒙层 .72→.64、深色 .76→.70；标题条使用较轻的 .46→.38 / .42→.36，并叠在同一磨砂底层之上。应用内模糊 sigma 28，原生窗口始终请求 Acrylic，移除清晰透明回退。系统关闭透明效果时会使用较实的材质；高对比度模式使用实色。设置、详情、关于和退出面板均使用共享 MacGlassSurface，文字和按钮不参与模糊。
 
 没有原版 macOS 运行截图，不能把当前截图视为与原版逐像素比较的结果。Segoe UI/微软雅黑替代 SF/PingFang，字形、字重和背景材质仍受系统影响。`visual-alignment/*-before.png` 是旧 Windows 实现的留档，不是 macOS 截图。
+
+Windows 标题栏布局参考 [Microsoft 标题栏设计指南](https://learn.microsoft.com/en-us/windows/apps/design/basics/titlebar-design)。当前窗口按钮为 Flutter 自绘，支持基本窗口操作；未实现原生最大化按钮悬停的 Snap Layouts 弹出面板。

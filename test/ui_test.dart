@@ -8,6 +8,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:clipboard_win/src/app.dart';
 import 'package:clipboard_win/src/store.dart';
 
+class _UiStore extends ClipboardStore {
+  _UiStore({required super.directory}) : super(usePlatform: false);
+  Future<bool>? pendingSetting;
+  @override
+  Future<bool> setting(String key, dynamic value) =>
+      pendingSetting = super.setting(key, value);
+}
+
 void main() {
   setUpAll(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
@@ -43,12 +51,15 @@ void main() {
       );
     await defaultFont.load();
     await icons.load();
+    final material = FontLoader('MaterialIcons')
+      ..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'));
+    await material.load();
   });
   late Directory directory;
-  late ClipboardStore store;
+  late _UiStore store;
   setUp(() async {
     directory = await Directory.systemTemp.createTemp('superclipboard-ui-');
-    store = ClipboardStore(directory: directory, usePlatform: false);
+    store = _UiStore(directory: directory);
     await store.initialize();
     await store.command({
       'op': 'ingest',
@@ -70,6 +81,7 @@ void main() {
   testWidgets(
     'main list, search, filters, detail and notebook work at original width',
     (tester) async {
+      store.settings['titleBarStyle'] = 'mac';
       tester.view.physicalSize = const Size(440, 640);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -113,6 +125,7 @@ void main() {
   testWidgets('light and dark layouts render at 420px without overflow', (
     tester,
   ) async {
+    store.settings['titleBarStyle'] = 'mac';
     tester.view.physicalSize = const Size(420, 640);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -194,6 +207,7 @@ void main() {
       directory: directory,
       usePlatform: false,
     );
+    remote.settings['titleBarStyle'] = 'mac';
     tester.view.physicalSize = const Size(320, 360);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -207,4 +221,112 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     remote.dispose();
   });
+  testWidgets(
+    'Windows is default; caption buttons stay right and settings switches live',
+    (tester) async {
+      tester.view.physicalSize = const Size(440, 640);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final boundaryKey = GlobalKey();
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: boundaryKey,
+          child: SuperClipboardApp(store: store),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(store.windowsStyle, isTrue);
+      expect(find.byType(MacWindowControls), findsNothing);
+      final controls = tester.getRect(find.byType(WindowsWindowControls));
+      expect(controls.right, 440);
+      expect(controls.size, const Size(138, 32));
+      expect(
+        tester
+            .getRect(find.byKey(const ValueKey('windows-caption-minimize')))
+            .left,
+        302,
+      );
+      expect(
+        tester
+            .getRect(find.byKey(const ValueKey('windows-caption-close')))
+            .right,
+        440,
+      );
+      expect(find.byTooltip('最大化窗口'), findsOneWidget);
+      store.setWindowMaximized(true);
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('还原窗口'), findsOneWidget);
+      store.setWindowMaximized(false);
+      await tester.pumpAndSettle();
+      Future<void> screenshot(String name) async {
+        final boundary =
+            boundaryKey.currentContext!.findRenderObject()
+                as RenderRepaintBoundary;
+        final image = await boundary.toImage(pixelRatio: 2);
+        final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+        await File('docs/screenshots/$name.png')
+            .writeAsBytes(bytes!.buffer.asUint8List());
+        image.dispose();
+      }
+
+      await tester.runAsync(() => screenshot('windows-style-light'));
+      await tester.runAsync(() => store.setting('appearance', 'dark'));
+      await tester.pumpAndSettle();
+      await tester.runAsync(() => screenshot('windows-style-dark'));
+      await tester.enterText(find.byType(TextField), '有迹可循');
+      await tester.pumpAndSettle();
+      expect(find.byType(HistoryCard), findsOneWidget);
+      await tester.tap(find.byTooltip('设置'));
+      await tester.pumpAndSettle();
+      Future<void> chooseStyle(String value) async {
+        final selector = tester.widget<PopupMenuButton<dynamic>>(
+          find.byWidgetPredicate(
+            (w) => w is PopupMenuButton && w.tooltip == '标题栏样式',
+          ),
+        );
+        await tester.runAsync(() async {
+          selector.onSelected!(value);
+          await store.pendingSetting!;
+        });
+        await tester.pumpAndSettle();
+      }
+
+      await chooseStyle('mac');
+      expect(store.windowsStyle, isFalse);
+      expect(find.byType(MacWindowControls), findsOneWidget);
+      expect(find.byType(WindowsWindowControls), findsNothing);
+      await tester.tap(find.byTooltip('关闭'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('设置'));
+      await tester.pumpAndSettle();
+      await chooseStyle('windows');
+      expect(find.byType(WindowsWindowControls), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+  testWidgets(
+    'Windows transfer title bar fits its 320px minimum without duplicate close',
+    (tester) async {
+      final remote = ClipboardStore(
+        mode: 'transfer',
+        directory: directory,
+        usePlatform: false,
+      );
+      tester.view.physicalSize = const Size(320, 360);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(SuperClipboardApp(store: remote));
+      await tester.pumpAndSettle();
+      expect(tester.getRect(find.byType(WindowsWindowControls)).right, 320);
+      expect(find.byTooltip('关闭窗口'), findsOneWidget);
+      expect(find.byTooltip('关闭中转站'), findsNothing);
+      expect(find.byType(MacWindowControls), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      remote.dispose();
+    },
+  );
 }

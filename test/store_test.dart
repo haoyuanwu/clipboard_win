@@ -288,4 +288,31 @@ void main() {
       expect(session.entries([a, b, c]).map((e) => e.id), ['b', 'c', 'a']);
     },
   );
+  test(
+    'window chrome defaults to Windows and saves an explicit macOS choice',
+    () async {
+      expect(store.windowsStyle, isTrue);
+      await store.setting('titleBarStyle', 'mac');
+      final reloaded = ClipboardStore(
+        directory: store.root,
+        usePlatform: false,
+      );
+      await reloaded.initialize();
+      expect(reloaded.windowsStyle, isFalse);
+      expect(reloaded.settings['titleBarStyle'], 'mac');
+      reloaded.dispose();
+      // Existing archives without the new preference also receive the Windows default.
+      final file = File('${store.root.path}/state.json');
+      final previous = await file.readAsString();
+      await file.writeAsString(
+        previous
+            .replaceAll('"titleBarStyle":"mac",', '')
+            .replaceAll(',"titleBarStyle":"mac"', ''),
+      );
+      final legacy = ClipboardStore(directory: store.root, usePlatform: false);
+      await legacy.initialize();
+      expect(legacy.windowsStyle, isTrue);
+      legacy.dispose();
+    },
+  );
 }
