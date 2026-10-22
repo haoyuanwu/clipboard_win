@@ -1,6 +1,6 @@
 #requires -Version 7.0
 param(
-  [string]$Repository = 'haoyuanwu/SuperClipboard-Windows',
+  [string]$Repository = 'haoyuanwu/clipboard_win',
   [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version,
   [string]$CommitMessage,
   [string]$NotesFile,

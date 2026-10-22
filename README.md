@@ -10,7 +10,7 @@
 
 ## 下载与安装
 
-前往 **[最新版本下载](https://github.com/haoyuanwu/SuperClipboard-Windows/releases/latest)**。
+前往 **[最新版本下载](https://github.com/haoyuanwu/clipboard_win/releases/latest)**。
 
 | 文件 | 使用方式 |
 | --- | --- |
