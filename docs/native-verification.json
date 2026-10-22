@@ -1,0 +1,18 @@
+[
+  {
+    "passed": true,
+    "name": "Unicode text listener and duplicate merge"
+  },
+  {
+    "passed": true,
+    "name": "RTF payload captured"
+  },
+  {
+    "passed": true,
+    "name": "File path captured"
+  },
+  {
+    "passed": true,
+    "name": "DIB image captured and saved"
+  }
+]

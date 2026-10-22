@@ -1,0 +1,23 @@
+name: clipboard_win
+description: SuperClipboard for Windows, built with Flutter.
+publish_to: none
+version: 1.2.0+1
+environment:
+  sdk: ^3.13.5
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  crypto: ^3.0.6
+  flutter_widget_from_html_core: ^0.17.4
+  media_kit: ^1.2.6
+  media_kit_video: ^2.0.1
+  media_kit_libs_windows_video: ^1.0.11
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/app_logo.png
