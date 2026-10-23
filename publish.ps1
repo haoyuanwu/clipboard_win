@@ -82,7 +82,7 @@ try {
   Invoke-ReleaseCommand git @('-c','credential.helper=','-c','credential.helper=!gh auth git-credential','push','origin',"refs/tags/v$Version")
   $draft = & gh release view "v$Version" --repo $Repository --json isDraft 2>$null
   if ($LASTEXITCODE -ne 0) {
-    Invoke-ReleaseCommand gh @('release','create',"v$Version",'--repo',$Repository,'--verify-tag','--draft','--title',"SuperClipboard Windows v$Version",'--notes-file',$NotesFile)
+    Invoke-ReleaseCommand gh @('release','create',"v$Version",'--repo',$Repository,'--verify-tag','--draft','--title',"v$Version",'--notes-file',$NotesFile)
   } elseif (-not (($draft | ConvertFrom-Json).isDraft)) { throw '该版本已被发布，停止覆盖附件。' }
   Invoke-ReleaseCommand gh (@('release','upload',"v$Version",'--repo',$Repository,'--clobber') + $assets)
   $uploaded = (& gh release view "v$Version" --repo $Repository --json assets | ConvertFrom-Json).assets
