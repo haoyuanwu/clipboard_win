@@ -231,7 +231,10 @@ Value Read(HWND window, IDataObject* object) {
       }
     }
   }
-  if (object) data[Value("fingerprint")] = Value(NarrowData(get(static_cast<CLIPFORMAT>(RegisterClipboardFormat(L"SuperClipboard.Entry")))));
+  if (object) {
+    const auto identity = NarrowData(get(static_cast<CLIPFORMAT>(RegisterClipboardFormat(L"SuperClipboard.Entry"))));
+    if (!identity.empty()) data[Value("fingerprint")] = Value(identity);
+  }
   if (!object) { Source(data); CloseClipboard(); }
   else data[Value("source")] = Value("拖入内容");
   return data.empty() ? Value() : Value(data);

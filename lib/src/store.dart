@@ -34,6 +34,7 @@ class ClipboardStore extends ChangeNotifier {
     'startup': true,
     'transferMinutes': 10,
     'transferHistory': false,
+    'folderDropMode': 'ask',
     'popoverShortcut': {
       'enabled': true,
       'modifiers': 3,
@@ -48,7 +49,14 @@ class ClipboardStore extends ChangeNotifier {
     },
   };
   String notebookPath = '', error = '';
+  final shortcutConflicts = <String, String>{};
+  int shortcutSettingsRevision = 0;
+  String shortcutName(String mode) => mode == 'popover' ? '打开快捷历史' : '打开悬浮中转';
+  String get shortcutConflictMessage => shortcutConflicts.entries
+      .map((e) => '${shortcutName(e.key)}：${e.value} 已被占用')
+      .join('；');
   bool busy = false, dropTargeted = false;
+  List<Map<String, dynamic>> folderDrops = [];
   bool windowMaximized = false, windowFocused = true;
   int _availabilityRevision = 0;
   bool _disposed = false;
@@ -107,7 +115,9 @@ class ClipboardStore extends ChangeNotifier {
     'notebookPath': notebookPath,
     'busy': busy,
     'error': error,
+    'shortcutConflicts': shortcutConflicts,
     'deadline': _transferDeadline?.toIso8601String(),
+    'folderDrops': folderDrops,
   };
   void _readSnapshot(Map<String, dynamic> j) {
     history = _decode(j['history']);
@@ -117,7 +127,13 @@ class ClipboardStore extends ChangeNotifier {
     notebookPath = j['notebookPath'] ?? notebookPath;
     busy = j['busy'] ?? false;
     error = j['error'] ?? '';
+    shortcutConflicts
+      ..clear()
+      ..addAll(Map<String, String>.from(j['shortcutConflicts'] ?? {}));
     _transferDeadline = DateTime.tryParse(j['deadline'] ?? '');
+    folderDrops = (j['folderDrops'] as List? ?? [])
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
   }
 
   List<ClipEntry> _decode(dynamic data) => (data as List? ?? [])
@@ -132,6 +148,9 @@ class ClipboardStore extends ChangeNotifier {
     if (usePlatform) {
       WindowsBridge.channel.setMethodCallHandler((call) async {
         switch (call.method) {
+          case 'shortcutSettings':
+            shortcutSettingsRevision++;
+            notifyListeners();
           case 'windowFocus':
             windowFocused = call.arguments == true;
             notifyListeners();
@@ -156,9 +175,11 @@ class ClipboardStore extends ChangeNotifier {
             );
           case 'drop':
             unawaited(() async {
+              // Reveal the destination before archiving (which may take time).
+              // A queued folder decision arrives through the shared snapshot.
+              await WindowsBridge.call('show', 'transfer');
               await command({'op': 'drop', 'data': call.arguments});
               dropTargeted = false;
-              await WindowsBridge.call('show', 'transfer');
             }());
           case 'dropHover':
             dropTargeted = call.arguments == true;
@@ -230,11 +251,16 @@ class ClipboardStore extends ChangeNotifier {
       } catch (e) {
         error = '开机启动设置失败：$e';
       }
-      final shortcutsReady = await WindowsBridge.call<bool>('setShortcuts', {
-        'popover': settings['popoverShortcut'],
-        'transfer': settings['transferShortcut'],
-      });
-      if (shortcutsReady != true) error = '部分全局快捷键已被占用，请在设置中重新录制。';
+      shortcutConflicts.clear();
+      if (error == '部分全局快捷键已被占用，请在设置中重新录制。') error = '';
+      for (final mode in ['popover', 'transfer']) {
+        final value = settings['${mode}Shortcut'] as Map;
+        final ok = await WindowsBridge.call<bool>('setShortcut', {
+          'mode': mode,
+          'shortcut': value,
+        });
+        if (ok != true) shortcutConflicts[mode] = value['label'] as String;
+      }
       await WindowsBridge.call('broadcast', snapshot);
       await WindowsBridge.call('listen', {
         'cache': '${root.path}/Cache',
@@ -285,9 +311,50 @@ class ClipboardStore extends ChangeNotifier {
         if (data != null) await _capture(Map<String, dynamic>.from(data));
       case 'drop':
         final data = Map<String, dynamic>.from(a['data']);
+        final choice = a['folderChoice'] ?? settings['folderDropMode'];
+        final identity = data['fingerprint'];
+        final savedDrag =
+            identity is String &&
+            identity.isNotEmpty &&
+            [...transfer, ...notebook].any((e) => e.fingerprint == identity);
+        if (choice == 'ask' && !savedDrag) {
+          final folders = <String>[];
+          for (final path in List<String>.from(data['paths'] ?? [])) {
+            if (await FileSystemEntity.type(path, followLinks: false) ==
+                FileSystemEntityType.directory) {
+              folders.add(path);
+            }
+          }
+          if (folders.isNotEmpty) {
+            folderDrops.add({'id': _id(), 'data': data, 'folders': folders});
+            break;
+          }
+        }
         final staged = data['temporaryDirectory'] as String? ?? '';
         var keepStaging = false;
         try {
+          if (choice == 'cancel') break;
+          if (choice == 'group' && !savedDrag) {
+            final expanded = <String>[];
+            var grouped = false;
+            for (final path in List<String>.from(data['paths'] ?? [])) {
+              if (await FileSystemEntity.type(path, followLinks: false) ==
+                  FileSystemEntityType.directory) {
+                final children = await Directory(path)
+                    .list(followLinks: false)
+                    .toList();
+                children.sort((a, b) => a.path.compareTo(b.path));
+                if (children.isNotEmpty) {
+                  expanded.addAll(children.map((e) => e.path));
+                  grouped = true;
+                  continue;
+                }
+              }
+              expanded.add(path); // Empty folders remain intact.
+            }
+            data['paths'] = expanded.toSet().toList();
+            data['fileGroup'] = grouped;
+          }
           final e = await _makeEntry(data);
           if (e == null ||
               transfer.any((x) => x.fingerprint == e.fingerprint)) {
@@ -316,6 +383,22 @@ class ClipboardStore extends ChangeNotifier {
             }
           }
         }
+      case 'resolveFolderDrop':
+        final pending = folderDrops
+            .where((e) => e['id'] == a['id'])
+            .firstOrNull;
+        if (pending == null) return false;
+        final choice = a['choice'];
+        if (!['group', 'folder', 'cancel'].contains(choice)) return false;
+        folderDrops.remove(pending);
+        if (a['remember'] == true && choice != 'cancel') {
+          settings['folderDropMode'] = choice;
+        }
+        return _perform({
+          'op': 'drop',
+          'data': pending['data'],
+          'folderChoice': choice,
+        });
       case 'copy':
         // Clipboard writes are handled by the owner engine to avoid recording ourselves.
         if (entry == null) return false;
@@ -389,11 +472,16 @@ class ClipboardStore extends ChangeNotifier {
           });
         }
         if (key.endsWith('Shortcut') && usePlatform) {
+          final mode = key == 'popoverShortcut' ? 'popover' : 'transfer';
           final ok = await WindowsBridge.call<bool>('setShortcut', {
-            'mode': key == 'popoverShortcut' ? 'popover' : 'transfer',
+            'mode': mode,
             'shortcut': value,
           });
-          if (ok != true) throw const FileSystemException('快捷键已被占用，请选择其他组合。');
+          if (ok != true) {
+            shortcutConflicts[mode] = value['label'] as String;
+            return false;
+          }
+          shortcutConflicts.remove(mode);
         }
         settings[key] = value;
         if (key == 'limit') await _trim();
@@ -446,6 +534,7 @@ class ClipboardStore extends ChangeNotifier {
     if (paths.isEmpty && text.trim().isEmpty && imagePath.isEmpty) return null;
     final kind = paths.isNotEmpty
         ? (paths.length == 1 &&
+                  d['fileGroup'] != true &&
                   RegExp(
                     r'\.(mp4|mov|mkv|avi|wmv|webm|m4v)$',
                     caseSensitive: false,
@@ -460,7 +549,8 @@ class ClipboardStore extends ChangeNotifier {
       final normalized =
           paths.map((p) => p.replaceAll('/', '\\').toLowerCase()).toList()
             ..sort();
-      key = 'files:${normalized.join('\n')}';
+      key =
+          '${d['fileGroup'] == true ? 'group' : 'files'}:${normalized.join('\n')}';
       // Dragging a saved copy back uses its original fingerprint.
       for (final e in [...transfer, ...notebook]) {
         if (listEquals(e.paths, paths)) return e;
@@ -499,6 +589,7 @@ class ClipboardStore extends ChangeNotifier {
       sourceIcon: d['sourceIcon'] ?? '',
       tint: d['tint'] ?? 0xff454d61,
       previewPath: preview,
+      fileGroup: d['fileGroup'] == true,
     );
   }
 
@@ -700,7 +791,8 @@ class ClipboardStore extends ChangeNotifier {
       File('$notebookPath/notebook.json'),
       jsonEncode(notebook.map((e) => e.toJson()).toList()),
     );
-    await _atomicWrite(File('${root.path}/state.json'), jsonEncode(snapshot));
+    final state = {...snapshot}..remove('folderDrops');
+    await _atomicWrite(File('${root.path}/state.json'), jsonEncode(state));
   }
 
   Future<bool> copy(ClipEntry e) =>

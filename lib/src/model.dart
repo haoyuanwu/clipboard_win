@@ -34,6 +34,7 @@ class ClipEntry {
     this.library = 'history',
     this.originalPaths = const [],
     this.previewPath = '',
+    this.fileGroup = false,
   });
   final String id, fingerprint, text, title, imagePath, html, rtf;
   final String source, sourceIcon, library, previewPath;
@@ -43,6 +44,8 @@ class ClipEntry {
   DateTime lastCopiedAt;
   int count, tint;
   bool pinned;
+  final bool fileGroup;
+  bool get isFileGroup => fileGroup || paths.length > 1;
   String get searchText => '$text $title ${paths.join(' ')} $source';
   ClipEntry copyWith({
     String? id,
@@ -62,6 +65,7 @@ class ClipEntry {
     originalPaths: originalPaths.isEmpty ? this.paths : originalPaths,
     imagePath: imagePath ?? this.imagePath,
     previewPath: previewPath ?? this.previewPath,
+    fileGroup: fileGroup,
     html: html,
     rtf: rtf,
     source: source,
@@ -91,6 +95,7 @@ class ClipEntry {
     'pinned': pinned,
     'library': library,
     'previewPath': previewPath,
+    'fileGroup': fileGroup,
   };
   factory ClipEntry.fromJson(Map<String, dynamic> j) => ClipEntry(
     id: j['id'] as String,
@@ -112,6 +117,7 @@ class ClipEntry {
     pinned: j['pinned'] ?? false,
     library: j['library'] ?? 'history',
     previewPath: j['previewPath'] ?? '',
+    fileGroup: j['fileGroup'] == true,
   );
 }
 

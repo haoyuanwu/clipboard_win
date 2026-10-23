@@ -2,6 +2,7 @@
 #include "clipboard_native.h"
 #include "flutter_window.h"
 #include "resource.h"
+#include "desktop_drag_source.h"
 #include <flutter/standard_method_codec.h>
 #include <flutter/method_result_functions.h>
 #include <shellapi.h>
@@ -18,13 +19,29 @@ constexpr UINT kTray = WM_APP + 31;
 constexpr UINT_PTR kClipboardRetry = 42;
 constexpr UINT_PTR kTrayVisibility = 43;
 constexpr UINT_PTR kReceiverPoll = 44;
+constexpr UINT kReceiverInput = WM_APP + 32;
 constexpr int kPopoverHotkey = 100, kTransferHotkey = 101;
 struct Shortcut { UINT modifiers = MOD_CONTROL | MOD_ALT, key = 0; bool enabled = true; };
 std::map<int, Shortcut> shortcuts;
 HWND receiver_window = nullptr;
+HWND receiver_probe = nullptr;
+bool receiver_file_drag = false;
+bool receiver_probe_checked = false;
+bool receiver_probe_engaged = false;
+HHOOK receiver_mouse_hook = nullptr;
 bool exporting_drag = false;
 POINT drag_origin{};
+HWND drag_source_window = nullptr;
+bool desktop_origin_checked = false;
 bool mouse_was_down = false;
+bool mouse_hook_down = false;
+bool receiver_drag_cancelled = false;
+HHOOK receiver_keyboard_hook = nullptr;
+ULONG_PTR receiver_press_count = 0;
+ULONGLONG drag_started_at = 0;
+ULONGLONG receiver_released_at = 0;
+bool receiver_targeted = false;
+void PollReceiver();
 int tray_visibility_attempts = 0;
 std::map<std::string, PlatformBridge*> bridges;
 std::vector<std::unique_ptr<FlutterWindow>> extra_windows;
@@ -61,7 +78,42 @@ bool SetShortcut(HWND window, int id, const Map& value) {
   shortcuts[id] = next;
   return true;
 }
+LRESULT CALLBACK ReceiverMouseProc(int code, WPARAM message, LPARAM data) {
+  if (code == HC_ACTION && receiver_window) {
+    const auto* mouse = reinterpret_cast<const MSLLHOOKSTRUCT*>(data);
+    if (message == WM_LBUTTONDOWN) {
+      mouse_hook_down = true;
+      receiver_drag_cancelled = false;
+      SetProp(receiver_window, L"SuperClipboard.MousePressCount", reinterpret_cast<HANDLE>(++receiver_press_count));
+      drag_origin = mouse->pt;
+      drag_source_window = WindowFromPoint(drag_origin);
+      desktop_origin_checked = false;
+      drag_started_at = GetTickCount64();
+      receiver_file_drag = false;
+      receiver_probe_checked = false;
+    } else if (message == WM_LBUTTONUP) {
+      mouse_hook_down = false;
+      receiver_released_at = GetTickCount64();
+    }
+    // Keep the hook short. Our own window handles visibility asynchronously.
+    if (message == WM_MOUSEMOVE || message == WM_LBUTTONDOWN || message == WM_LBUTTONUP) {
+      PostMessage(receiver_window, kReceiverInput, 0, 0);
+    }
+  }
+  return CallNextHookEx(receiver_mouse_hook, code, message, data);
+}
+LRESULT CALLBACK ReceiverKeyboardProc(int code, WPARAM message, LPARAM data) {
+  if (code == HC_ACTION && (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) &&
+      reinterpret_cast<const KBDLLHOOKSTRUCT*>(data)->vkCode == VK_ESCAPE) {
+    receiver_drag_cancelled = true;
+    if (receiver_window) PostMessage(receiver_window, kReceiverInput, 0, 0);
+  }
+  return CallNextHookEx(receiver_keyboard_hook, code, message, data);
+}
 LRESULT CALLBACK ReceiverProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
+  if ((message == WM_TIMER && wp == kReceiverPoll) || message == kReceiverInput) {
+    PollReceiver(); return 0;
+  }
   if (message == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
   if (message == WM_PAINT) {
     PAINTSTRUCT paint; auto dc = BeginPaint(hwnd, &paint);
@@ -72,26 +124,98 @@ LRESULT CALLBACK ReceiverProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
     auto font = CreateFont(size, 0, 0, 0, FW_MEDIUM, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
       OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
     auto old = SelectObject(dc, font);
-    DrawText(dc, L"放入悬浮中转\n松开即可收纳文件", -1, &rect, DT_CENTER | DT_VCENTER | DT_WORDBREAK);
-    SelectObject(dc, old); DeleteObject(font); EndPaint(hwnd, &paint); return 0;
+    const auto dpi = GetDpiForWindow(hwnd);
+    RECT title = rect;
+    title.top += MulDiv(18, dpi, 96);
+    title.bottom = title.top + MulDiv(26, dpi, 96);
+    DrawText(dc, receiver_targeted ? L"松开即可加入中转站" : L"添加到中转站", -1, &title,
+      DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    RECT hint = rect;
+    hint.top += MulDiv(50, dpi, 96);
+    hint.bottom -= MulDiv(10, dpi, 96);
+    SetTextColor(dc, RGB(65, 85, 114));
+    auto hint_font = CreateFont(-MulDiv(10, dpi, 72), 0, 0, 0, FW_NORMAL,
+      FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+      CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
+    SelectObject(dc, hint_font);
+    DrawText(dc, L"拖入文件或文件夹，松手收纳", -1, &hint,
+      DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    SelectObject(dc, old); DeleteObject(hint_font); DeleteObject(font); EndPaint(hwnd, &paint); return 0;
   }
   return DefWindowProc(hwnd, message, wp, lp);
 }
 void PollReceiver() {
-  const bool down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+  // Hook callbacks preserve real button transitions even when asynchronous key
+  // polling is unavailable while the shell desktop owns foreground input.
+  const bool down = receiver_mouse_hook ? mouse_hook_down : (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
   POINT point; GetCursorPos(&point);
-  if (down && !mouse_was_down) drag_origin = point;
+  if (down && !mouse_was_down && !receiver_mouse_hook) {
+    drag_origin = point;
+    drag_source_window = WindowFromPoint(drag_origin);
+    desktop_origin_checked = false;
+    drag_started_at = GetTickCount64();
+    receiver_file_drag = false;
+    receiver_probe_checked = false;
+    receiver_drag_cancelled = false;
+  }
   mouse_was_down = down;
   if (!receiver_window) return;
-  if (!down || exporting_drag) { ShowWindow(receiver_window, SW_HIDE); return; }
+  // OLE calls Drop after processing button-up in the source process. Do not
+  // remove its target in the global hook/timer before that callback arrives.
+  // Bound the grace period in case the source exits without Drop/DragLeave.
+  if (!down && receiver_targeted && !exporting_drag && !receiver_drag_cancelled &&
+      GetTickCount64() - receiver_released_at < 750) return;
+  if (!down || exporting_drag || receiver_drag_cancelled || (GetAsyncKeyState(VK_ESCAPE) & 0x8000)) {
+    receiver_file_drag = false;
+    ShowWindow(receiver_window, SW_HIDE);
+    if (receiver_probe && !receiver_probe_engaged) ShowWindow(receiver_probe, SW_HIDE);
+    return;
+  }
   MONITORINFO monitor{sizeof(monitor)};
   GetMonitorInfo(MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST), &monitor);
   const int scale = static_cast<int>(GetDpiForWindow(receiver_window));
-  const int w = MulDiv(190, scale, 96), h = MulDiv(90, scale, 96), margin = MulDiv(16, scale, 96);
+  const int w = MulDiv(250, scale, 96), h = MulDiv(96, scale, 96), margin = MulDiv(16, scale, 96);
   const bool moved = abs(point.x - drag_origin.x) + abs(point.y - drag_origin.y) > MulDiv(16, scale, 96);
-  const bool near_corner = point.x > monitor.rcWork.right - w - margin * 2 && point.y < monitor.rcWork.top + h + margin * 2;
-  if (moved && near_corner) SetWindowPos(receiver_window, HWND_TOPMOST, monitor.rcWork.right - w - margin,
-    monitor.rcWork.top + margin, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+  // A near-transparent OLE probe checks the actual payload before revealing
+  // the receiver. Mouse movement alone must never open the visible window.
+  GUITHREADINFO gui{sizeof(gui)};
+  const bool moving_window = GetGUIThreadInfo(0, &gui) && (gui.flags & GUI_INMOVESIZE);
+  const bool sustained = GetTickCount64() - drag_started_at >= 180;
+  SetProp(receiver_window, L"SuperClipboard.DragState", reinterpret_cast<HANDLE>(static_cast<INT_PTR>(
+    static_cast<int>(down) | (moved << 1) | (sustained << 2) | (moving_window << 3) |
+    (receiver_probe_checked << 4) | (receiver_file_drag << 5) | (desktop_origin_checked << 6))));
+  if (moved && sustained && !moving_window && !desktop_origin_checked) {
+    desktop_origin_checked = true;
+    if (IsDesktopFileDragOrigin(drag_source_window, drag_origin)) {
+      receiver_file_drag = true;
+      receiver_probe_checked = true;
+    }
+  }
+  if (receiver_probe) {
+    if (moved && sustained && !moving_window && !receiver_probe_checked && !receiver_file_drag) {
+      // Keep the probe stationary across the monitor. A tiny window following
+      // the cursor misses OLE hit tests during fast Explorer/desktop drags.
+      auto style = GetWindowLongPtr(receiver_probe, GWL_EXSTYLE);
+      if (style & WS_EX_TRANSPARENT) SetWindowLongPtr(receiver_probe, GWL_EXSTYLE, style & ~WS_EX_TRANSPARENT);
+      SetWindowPos(receiver_probe, HWND_TOPMOST, monitor.rcMonitor.left, monitor.rcMonitor.top,
+        monitor.rcMonitor.right - monitor.rcMonitor.left,
+        monitor.rcMonitor.bottom - monitor.rcMonitor.top, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    } else {
+      // Let the OLE loop leave the probe naturally, without consuming a drop
+      // or continuing to cover the desktop after inspecting the formats.
+      if (receiver_probe_checked) {
+        auto style = GetWindowLongPtr(receiver_probe, GWL_EXSTYLE);
+        if (!(style & WS_EX_TRANSPARENT)) SetWindowLongPtr(receiver_probe, GWL_EXSTYLE, style | WS_EX_TRANSPARENT);
+      }
+      if (!receiver_probe_engaged) ShowWindow(receiver_probe, SW_HIDE);
+    }
+  }
+  if (receiver_file_drag && !moving_window) {
+    const bool visible = IsWindowVisible(receiver_window) != FALSE;
+    SetWindowPos(receiver_window, HWND_TOPMOST, monitor.rcWork.left + margin,
+      monitor.rcWork.top + margin, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    if (!visible) RedrawWindow(receiver_window, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+  }
   else ShowWindow(receiver_window, SW_HIDE);
 }
 // Windows 11 stores the user's per-icon preference here. Set only this app's
@@ -149,7 +273,8 @@ void TrayIcon(HWND hwnd) {
 }
 class PlatformBridge::DropTarget : public IDropTarget {
  public:
-  explicit DropTarget(PlatformBridge* owner, bool receiver = false) : owner_(owner), receiver_(receiver) {}
+  explicit DropTarget(PlatformBridge* owner, bool receiver = false, bool probe = false)
+    : owner_(owner), receiver_(receiver), probe_(probe) {}
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
     if (iid == IID_IUnknown || iid == IID_IDropTarget) { *out = this; AddRef(); return S_OK; }
     *out = nullptr; return E_NOINTERFACE;
@@ -163,16 +288,40 @@ class PlatformBridge::DropTarget : public IDropTarget {
       FORMATETC f{cf, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
       if ((!receiver_ || cf == CF_HDROP || cf == RegisterClipboardFormat(CFSTR_FILEDESCRIPTORW)) && SUCCEEDED(object->QueryGetData(&f))) accepted_ = true;
     }
-    *effect = accepted_ ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+    if (probe_) {
+      receiver_probe_engaged = true;
+      receiver_probe_checked = true;
+      receiver_file_drag = accepted_;
+      *effect = DROPEFFECT_NONE;
+      // Defer window changes until the OLE callback has returned.
+      PostMessage(receiver_window, kReceiverInput, 0, 0);
+      return S_OK;
+    }
+    *effect &= accepted_ ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+    if (receiver_) { receiver_targeted = accepted_; InvalidateRect(receiver_window, nullptr, FALSE); }
     owner_->Notify("dropHover", Value(accepted_)); return S_OK;
   }
   HRESULT STDMETHODCALLTYPE DragOver(DWORD, POINTL, DWORD* effect) override {
-    *effect = accepted_ ? DROPEFFECT_COPY : DROPEFFECT_NONE; return S_OK;
+    *effect &= accepted_ && !probe_ ? DROPEFFECT_COPY : DROPEFFECT_NONE; return S_OK;
   }
-  HRESULT STDMETHODCALLTYPE DragLeave() override { owner_->Notify("dropHover", Value(false)); return S_OK; }
+  HRESULT STDMETHODCALLTYPE DragLeave() override {
+    if (probe_) {
+      receiver_probe_engaged = false;
+      PostMessage(receiver_window, kReceiverInput, 0, 0);
+      return S_OK;
+    }
+    if (receiver_) { receiver_targeted = false; InvalidateRect(receiver_window, nullptr, FALSE); }
+    owner_->Notify("dropHover", Value(false)); return S_OK;
+  }
   HRESULT STDMETHODCALLTYPE Drop(IDataObject* object, DWORD, POINTL, DWORD* effect) override {
+    // The probe only observes formats; it never reads or consumes a drop.
+    if (probe_) {
+      receiver_probe_engaged = false;
+      PostMessage(receiver_window, kReceiverInput, 0, 0);
+      *effect = DROPEFFECT_NONE; return S_OK;
+    }
     owner_->Notify("dropHover", Value(false));
-    if (receiver_) ShowWindow(receiver_window, SW_HIDE);
+    if (receiver_) { receiver_targeted = false; ShowWindow(receiver_window, SW_HIDE); }
     Value data = accepted_ ? clipboard_native::Read(owner_->window_, object) : Value();
     if (std::holds_alternative<Map>(data)) {
       owner_->Notify("drop", data); *effect = DROPEFFECT_COPY;
@@ -180,7 +329,7 @@ class PlatformBridge::DropTarget : public IDropTarget {
     return S_OK;
   }
  private:
-  ULONG refs_ = 1; PlatformBridge* owner_; bool accepted_ = false, receiver_ = false;
+  ULONG refs_ = 1; PlatformBridge* owner_; bool accepted_ = false, receiver_ = false, probe_ = false;
 };
 
 PlatformBridge::PlatformBridge(flutter::BinaryMessenger* messenger, HWND window,
@@ -199,21 +348,40 @@ PlatformBridge::PlatformBridge(flutter::BinaryMessenger* messenger, HWND window,
     WNDCLASS wc{}; wc.lpfnWndProc = ReceiverProc; wc.hInstance = GetModuleHandle(nullptr);
     wc.lpszClassName = L"SuperClipboard.DragReceiver"; wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     RegisterClass(&wc);
-    receiver_window = CreateWindowEx(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
-      wc.lpszClassName, L"SuperClipboard 文件收纳", WS_POPUP, 0, 0, 190, 90, window_, nullptr, wc.hInstance, nullptr);
+    // An independent top-level window stays available when all Flutter windows
+    // are hidden or minimized. Keep its timer independent of their lifecycle.
+    receiver_window = CreateWindowEx(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+      wc.lpszClassName, L"SuperClipboard 文件收纳", WS_POPUP, 0, 0, 190, 90, nullptr, nullptr, wc.hInstance, nullptr);
     if (receiver_window) {
-      SetLayeredWindowAttributes(receiver_window, 0, 232, LWA_ALPHA);
       const DWM_WINDOW_CORNER_PREFERENCE round = DWMWCP_ROUND;
       DwmSetWindowAttribute(receiver_window, DWMWA_WINDOW_CORNER_PREFERENCE, &round, sizeof(round));
-      struct Accent { int state; DWORD flags, tint, animation; };
-      struct Composition { int attribute; void* data; SIZE_T size; };
-      using SetComposition = BOOL(WINAPI*)(HWND, Composition*);
-      auto set_composition = reinterpret_cast<SetComposition>(GetProcAddress(GetModuleHandle(L"user32.dll"), "SetWindowCompositionAttribute"));
-      if (set_composition) { Accent accent{4, 2, 0x30ffffff, 0}; Composition composition{19, &accent, sizeof(accent)}; set_composition(receiver_window, &composition); }
       auto target = new DropTarget(this, true);
       if (FAILED(RegisterDragDrop(receiver_window, target))) { DestroyWindow(receiver_window); receiver_window = nullptr; }
       target->Release();
-      if (receiver_window) SetTimer(window_, kReceiverPoll, 50, nullptr);
+      if (receiver_window) {
+        WNDCLASS probe_class{};
+        probe_class.lpfnWndProc = DefWindowProc;
+        probe_class.hInstance = wc.hInstance;
+        probe_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+        probe_class.lpszClassName = L"SuperClipboard.DragProbe";
+        RegisterClass(&probe_class);
+        receiver_probe = CreateWindowEx(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
+          probe_class.lpszClassName, L"", WS_POPUP, 0, 0, 32, 32, nullptr, nullptr, wc.hInstance, nullptr);
+        if (receiver_probe) {
+          // Alpha zero is excluded from hit testing. Alpha one lets OLE inspect
+          // the payload without displaying a visible collection window.
+          SetLayeredWindowAttributes(receiver_probe, 0, 1, LWA_ALPHA);
+          auto probe_target = new DropTarget(this, true, true);
+          if (FAILED(RegisterDragDrop(receiver_probe, probe_target))) {
+            DestroyWindow(receiver_probe); receiver_probe = nullptr;
+          }
+          probe_target->Release();
+        }
+        SetTimer(receiver_window, kReceiverPoll, 50, nullptr);
+        receiver_mouse_hook = SetWindowsHookEx(WH_MOUSE_LL, ReceiverMouseProc, GetModuleHandle(nullptr), 0);
+        SetProp(receiver_window, L"SuperClipboard.MouseHookInstalled", reinterpret_cast<HANDLE>(static_cast<INT_PTR>(receiver_mouse_hook != nullptr)));
+        receiver_keyboard_hook = SetWindowsHookEx(WH_KEYBOARD_LL, ReceiverKeyboardProc, GetModuleHandle(nullptr), 0);
+      }
     }
   }
   const DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
@@ -231,6 +399,13 @@ PlatformBridge::PlatformBridge(flutter::BinaryMessenger* messenger, HWND window,
     if (method == "broadcast") {
       if (args) shared_state = *args;
       for (auto& [mode, bridge] : bridges) if (mode != "main") bridge->Notify("state", shared_state);
+      result->Success();
+    } else if (method == "shortcutSettings") {
+      auto main = bridges.find("main");
+      if (main != bridges.end()) {
+        main->second->ShowWindowForMode("main");
+        main->second->Notify("shortcutSettings");
+      }
       result->Success();
     } else if (method == "setShortcut" || method == "setShortcuts") {
       auto main = bridges.find("main");
@@ -371,7 +546,10 @@ PlatformBridge::~PlatformBridge() {
   bridges.erase(mode_);
   if (mode_ == "main") {
     UnregisterHotKey(window_, kPopoverHotkey); UnregisterHotKey(window_, kTransferHotkey);
-    KillTimer(window_, kReceiverPoll);
+    if (receiver_mouse_hook) { UnhookWindowsHookEx(receiver_mouse_hook); receiver_mouse_hook = nullptr; }
+    if (receiver_keyboard_hook) { UnhookWindowsHookEx(receiver_keyboard_hook); receiver_keyboard_hook = nullptr; }
+    if (receiver_window) KillTimer(receiver_window, kReceiverPoll);
+    if (receiver_probe) { RevokeDragDrop(receiver_probe); DestroyWindow(receiver_probe); receiver_probe = nullptr; }
     if (receiver_window) { RevokeDragDrop(receiver_window); DestroyWindow(receiver_window); receiver_window = nullptr; }
     RemoveClipboardFormatListener(window_); Shell_NotifyIcon(NIM_DELETE, &tray); }
   if (drop_) { RevokeDragDrop(view_); RevokeDragDrop(window_); drop_->Release(); }
@@ -464,7 +642,6 @@ std::optional<LRESULT> PlatformBridge::Handle(UINT message, WPARAM wp, LPARAM lp
       }
       break;
     case WM_TIMER:
-      if (wp == kReceiverPoll && mode_ == "main") { PollReceiver(); return 0; }
       if (wp == kTrayVisibility) {
         if (EnsureTrayVisibleByDefault() || ++tray_visibility_attempts >= 10) KillTimer(window_, kTrayVisibility);
         return 0;

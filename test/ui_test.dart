@@ -28,6 +28,29 @@ class _QuickCopyStore extends ClipboardStore {
   }
 }
 
+class _StoragePreviewStore extends ClipboardStore {
+  _StoragePreviewStore({required super.directory}) : super(usePlatform: false);
+  @override
+  Future<bool> setting(String key, dynamic value) async {
+    settings[key] = value;
+    notifyListeners();
+    return true;
+  }
+}
+
+class _FolderPromptStore extends ClipboardStore {
+  _FolderPromptStore({required super.directory})
+    : super(mode: 'transfer', usePlatform: false);
+  final resolved = <Map<String, dynamic>>[];
+  @override
+  Future<bool> command(Map<String, dynamic> action) async {
+    resolved.add(action);
+    folderDrops.removeWhere((e) => e['id'] == action['id']);
+    notifyListeners();
+    return true;
+  }
+}
+
 void main() {
   setUpAll(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
@@ -90,6 +113,252 @@ void main() {
     store.dispose();
     await directory.delete(recursive: true);
   });
+  testWidgets(
+    'source icons keep the same right inset across names and image states',
+    (tester) async {
+      final now = DateTime.now();
+      store.history = [
+        for (final (index, source, icon) in [
+          (0, '记事本', ''),
+          (
+            1,
+            'Microsoft Visual Studio Code',
+            '${Directory.current.path}/assets/app_logo.png',
+          ),
+          (2, 'Shell', '${directory.path}/missing-icon.png'),
+        ])
+          ClipEntry(
+            id: 'source-$index',
+            fingerprint: 'source-$index',
+            kind: EntryKind.text,
+            createdAt: now,
+            lastCopiedAt: now,
+            text: '来源图标对齐',
+            source: source,
+            sourceIcon: icon,
+            count: index == 2 ? 999 : 1,
+            pinned: index == 1,
+          ),
+      ];
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final boundaryKey = GlobalKey();
+      for (final width in [440.0, 420.0]) {
+        tester.view.physicalSize = Size(width, 720);
+        await tester.pumpWidget(
+          RepaintBoundary(
+            key: boundaryKey,
+            child: SuperClipboardApp(store: store),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final iconRights = <double>[];
+        for (final element in find.byType(HistoryCard).evaluate()) {
+          final card = find.byElementPredicate((e) => e == element);
+          final icon = find.descendant(
+            of: card,
+            matching: find.byType(SourceIcon),
+          );
+          final rect = tester.getRect(icon);
+          expect(rect.size, const Size(20, 20));
+          expect(rect.right, tester.getRect(card).right - 16);
+          iconRights.add(rect.right);
+        }
+        expect(iconRights, hasLength(3));
+        expect(iconRights.toSet(), hasLength(1));
+        expect(tester.takeException(), isNull);
+        if (width == 440) {
+          await tester.runAsync(() async {
+            final boundary =
+                boundaryKey.currentContext!.findRenderObject()
+                    as RenderRepaintBoundary;
+            final image = await boundary.toImage(pixelRatio: 2);
+            final bytes = await image.toByteData(
+              format: ui.ImageByteFormat.png,
+            );
+            await File('build/source-icon-alignment.png')
+                .writeAsBytes(bytes!.buffer.asUint8List());
+            image.dispose();
+          });
+        }
+        await tester.pumpWidget(const SizedBox.shrink());
+      }
+    },
+  );
+  testWidgets(
+    'storage preferences have clear groups and keep controls usable at narrow widths',
+    (tester) async {
+      final preferences = _StoragePreviewStore(directory: directory);
+      addTearDown(preferences.dispose);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      preferences.notebookPath =
+          r'C:\Users\Administrator\AppData\Roaming\SuperClipboard\Notebook';
+      final boundaryKey = GlobalKey();
+      for (final dark in [true, false]) {
+        tester.view.physicalSize = const Size(420, 720);
+        await tester.pumpWidget(
+          RepaintBoundary(
+            key: boundaryKey,
+            child: MaterialApp(
+              debugShowCheckedModeBanner: false,
+              theme: ThemeData(
+                brightness: dark ? Brightness.dark : Brightness.light,
+                colorScheme: ColorScheme.fromSeed(
+                  seedColor: const Color(0xff1f5ce0),
+                  brightness: dark ? Brightness.dark : Brightness.light,
+                ),
+                fontFamily: ReplicaMetrics.fontFamily,
+                fontFamilyFallback: ReplicaMetrics.fontFallback,
+              ),
+              home: Scaffold(
+                backgroundColor: dark
+                    ? const Color(0xff23262d)
+                    : const Color(0xfff3f3f3),
+                body: SingleChildScrollView(
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: ListenableBuilder(
+                      listenable: preferences,
+                      builder: (_, _) =>
+                          TransferStorageSettings(store: preferences),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('悬浮中转'), findsOneWidget);
+        expect(find.text('记事本'), findsOneWidget);
+        expect(find.byType(Divider), findsNWidgets(2));
+        expect(tester.takeException(), isNull);
+        await tester.runAsync(() async {
+          final boundary =
+              boundaryKey.currentContext!.findRenderObject()
+                  as RenderRepaintBoundary;
+          final image = await boundary.toImage(pixelRatio: 2);
+          final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+          await File('build/settings-storage-${dark ? 'dark' : 'light'}.png')
+              .writeAsBytes(bytes!.buffer.asUint8List());
+          image.dispose();
+        });
+        await tester.tap(find.byTooltip('拖入文件夹'));
+        await tester.pumpAndSettle();
+        await tester.runAsync(() async {
+          await tester.tap(find.text('作为文件组').last);
+        });
+        await tester.pumpAndSettle();
+        expect(preferences.settings['folderDropMode'], 'group');
+        await tester.runAsync(() async {
+          await tester.tap(find.byTooltip('增加清空时间'));
+        });
+        await tester.pumpAndSettle();
+        expect(preferences.settings['transferMinutes'], dark ? 11 : 12);
+        tester.view.physicalSize = const Size(320, 720);
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      }
+    },
+  );
+  testWidgets(
+    'transfer engine presents queued folder prompts and resolves each only once',
+    (tester) async {
+      final remote = _FolderPromptStore(directory: directory);
+      remote.folderDrops = [
+        {
+          'id': 'first',
+          'folders': ['C:/first'],
+        },
+        {
+          'id': 'second',
+          'folders': ['C:/second'],
+        },
+      ];
+      tester.view.physicalSize = const Size(320, 460);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: const ValueKey('folder-prompt-preview'),
+          child: SuperClipboardApp(store: remote),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('first'), findsOneWidget);
+      final boundary = tester.renderObject<RenderRepaintBoundary>(
+        find.byKey(const ValueKey('folder-prompt-preview')),
+      );
+      await tester.runAsync(() async {
+        final image = await boundary.toImage(pixelRatio: 2);
+        final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+        await Directory('build').create(recursive: true);
+        await File('build/folder-prompt.png')
+            .writeAsBytes(bytes!.buffer.asUint8List());
+        image.dispose();
+      });
+      await tester.tap(find.text('下次不再询问'));
+      await tester.tap(find.text('作为文件组'));
+      await tester.pumpAndSettle();
+      expect(find.text('second'), findsOneWidget);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(remote.resolved.map((e) => e['id']), ['first', 'second']);
+      expect(remote.resolved.first['remember'], isTrue);
+      expect(remote.resolved.last['choice'], 'cancel');
+      expect(find.byType(FolderDropDialog), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      remote.dispose();
+    },
+  );
+  testWidgets(
+    'folder prompt fits compact windows and remembers either decision',
+    (tester) async {
+      tester.view.physicalSize = const Size(320, 360);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      for (final choice in ['作为文件组', '保留文件夹']) {
+        ({String choice, bool remember})? result;
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Builder(
+              builder: (context) => Scaffold(
+                body: TextButton(
+                  onPressed: () async {
+                    result = await showDialog<({String choice, bool remember})>(
+                      context: context,
+                      builder: (_) =>
+                          const FolderDropDialog(folders: ['C:/测试文件夹']),
+                    );
+                  },
+                  child: const Text('打开'),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.text('打开'));
+        await tester.pumpAndSettle();
+        expect(find.text('将文件夹作为文件组？'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+        await tester.ensureVisible(find.text('下次不再询问'));
+        await tester.tap(find.text('下次不再询问'));
+        await tester.ensureVisible(find.text(choice));
+        await tester.tap(find.text(choice));
+        await tester.pumpAndSettle();
+        expect(result?.remember, isTrue);
+        expect(result?.choice, choice == '作为文件组' ? 'group' : 'folder');
+        await tester.pumpWidget(const SizedBox.shrink());
+      }
+    },
+  );
   testWidgets(
     'main list, search, filters, detail and notebook work at original width',
     (tester) async {

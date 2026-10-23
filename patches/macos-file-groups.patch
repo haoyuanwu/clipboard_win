@@ -1,0 +1,209 @@
+--- a/SuperClipboard/SuperClipboard/ClipboardStore.swift
++++ b/SuperClipboard/SuperClipboard/ClipboardStore.swift
+@@ -49,8 +49,9 @@
+     var notebookFolderName: String? = nil
+     var previewAspectRatio: CGFloat? = nil
+     var transferFolderName: String? = nil
+-
+-    var isFileGroup: Bool { (kind == .file || kind == .video) && filePaths.count > 1 }
++    var folderAsGroup: Bool? = nil
++
++    var isFileGroup: Bool { folderAsGroup == true || ((kind == .file || kind == .video) && filePaths.count > 1) }
+ 
+     var isNotebookEntry: Bool { notebookFolderName != nil }
+     var isTransferEntry: Bool { transferFolderName != nil }
+@@ -100,6 +101,9 @@
+     @Published var dragError: String?
+     @Published var transferDropSavesHistory = false {
+         didSet { defaults.set(transferDropSavesHistory, forKey: "transferDropSavesHistory") }
++    }
++    @Published var folderDropMode = "ask" {
++        didSet { defaults.set(folderDropMode, forKey: "folderDropMode") }
+     }
+     @Published var transferClearMinutes = 10 {
+         didSet {
+@@ -213,6 +217,7 @@
+             transferClearMinutes = min(1440, max(1, minutes))
+         }
+         transferDropSavesHistory = defaults.bool(forKey: "transferDropSavesHistory")
++        folderDropMode = defaults.string(forKey: "folderDropMode") ?? "ask"
+         do {
+             let index = transferDirectory.appendingPathComponent("transfer.json")
+             if FileManager.default.fileExists(atPath: index.path) {
+@@ -309,7 +314,7 @@
+         return result
+     }
+ 
+-    private func record(kind: EntryKind, fingerprint: String, text: String?, paths: [String], payload: Data?, payloadExtension: String? = nil, thumbnail: Data?, sourceName: String, sourceID: String?) {
++    private func record(kind: EntryKind, fingerprint: String, text: String?, paths: [String], payload: Data?, payloadExtension: String? = nil, thumbnail: Data?, sourceName: String, sourceID: String?, folderAsGroup: Bool = false) {
+         let now = Date()
+         let fileExtension = kind == .text ? "rtf" : (payloadExtension.flatMap { $0.isEmpty ? nil : $0 } ?? "png")
+         if let index = entries.firstIndex(where: { $0.kind == kind && $0.fingerprint == fingerprint }) {
+@@ -318,6 +323,7 @@
+             entries[index].lastCopiedAt = now
+             entries[index].sourceAppName = sourceName
+             entries[index].sourceBundleID = sourceID
++            if folderAsGroup { entries[index].folderAsGroup = true }
+             if let payload {
+                 if kind == .image { entries[index].previewAspectRatio = ClipboardPreviewImage.aspectRatio(data: payload) }
+                 let name = entries[index].payloadName ?? "\(entries[index].id.uuidString).\(fileExtension)"
+@@ -342,7 +348,7 @@
+         entries.append(ClipboardEntry(id: id, kind: kind, fingerprint: fingerprint, plainText: text,
+                                       filePaths: paths, payloadName: payloadName, thumbnailName: thumbnailName,
+                                       sourceAppName: sourceName, sourceBundleID: sourceID, createdAt: now,
+-                                      lastCopiedAt: now, copyCount: 1, isPinned: false))
++                                      lastCopiedAt: now, copyCount: 1, isPinned: false, folderAsGroup: folderAsGroup ? true : nil))
+         if kind == .image, let payload, let index = entries.firstIndex(where: { $0.id == id }) {
+             entries[index].previewAspectRatio = ClipboardPreviewImage.aspectRatio(data: payload)
+         }
+@@ -862,14 +868,58 @@
+     func addDroppedFilesToTransfer(_ urls: [URL]) {
+         guard !urls.isEmpty, urls.allSatisfy(\.isFileURL) else { return }
+         var seen = Set<String>()
+-        let uniqueURLs = urls.map { $0.standardizedFileURL.resolvingSymlinksInPath() }
++        var uniqueURLs = urls.map { $0.standardizedFileURL.resolvingSymlinksInPath() }
+             .filter { seen.insert($0.path).inserted }
+         // A destination may strip our private drag marker. Staged payloads and
+         // exported file groups still belong to this shelf and must not re-enter.
+         let shelfPath = transferDirectory.standardizedFileURL.resolvingSymlinksInPath().path
+         guard !uniqueURLs.contains(where: { $0.path == shelfPath || $0.path.hasPrefix(shelfPath + "/") }) else { return }
++        let directories = uniqueURLs.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
++        var folderAsGroup = false
++        if !directories.isEmpty {
++            var choice = ["ask", "group", "folder"].contains(folderDropMode) ? folderDropMode : "ask"
++            if choice == "ask" {
++                let alert = NSAlert()
++                alert.messageText = "将文件夹作为文件组？"
++                alert.informativeText = directories.map(\.lastPathComponent).joined(separator: "、")
++                    + "\n作为文件组：展开第一层内容，便于逐项复制和拖出。子文件夹和空文件夹保持完整。可在设置 → 悬浮中转中修改。"
++                alert.icon = NSImage(systemSymbolName: "doc.on.doc.fill", accessibilityDescription: "文件组")
++                alert.addButton(withTitle: "作为文件组")
++                alert.addButton(withTitle: "保留文件夹")
++                alert.addButton(withTitle: "取消")
++                alert.showsSuppressionButton = true
++                alert.suppressionButton?.title = "下次不再询问"
++                NSApp.activate(ignoringOtherApps: true)
++                let response = alert.runModal()
++                guard response == .alertFirstButtonReturn || response == .alertSecondButtonReturn else { return }
++                choice = response == .alertFirstButtonReturn ? "group" : "folder"
++                if alert.suppressionButton?.state == .on { folderDropMode = choice }
++            }
++            if choice == "group" {
++                do {
++                    var expanded: [URL] = []
++                    for url in uniqueURLs {
++                        if directories.contains(url) {
++                            let children = try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)
++                                .sorted { $0.lastPathComponent < $1.lastPathComponent }
++                            if !children.isEmpty {
++                                expanded.append(contentsOf: children)
++                                folderAsGroup = true
++                                continue
++                            }
++                        }
++                        expanded.append(url)
++                    }
++                    var members = Set<String>()
++                    uniqueURLs = expanded.filter { members.insert($0.standardizedFileURL.path).inserted }
++                } catch {
++                    transferError = "无法读取文件夹：\(error.localizedDescription)"
++                    return
++                }
++            }
++        }
+         let kind: EntryKind
+-        if uniqueURLs.count == 1, let type = UTType(filenameExtension: uniqueURLs[0].pathExtension) {
++        if !folderAsGroup, uniqueURLs.count == 1, let type = UTType(filenameExtension: uniqueURLs[0].pathExtension) {
+             kind = type.conforms(to: .image) ? .image : (type.conforms(to: .movie) ? .video : .file)
+         } else {
+             kind = .file
+@@ -881,12 +931,12 @@
+             guard !containsTransferImage(fingerprint: fingerprint) else { return }
+         } else {
+             // File order and duplicate URLs within the drop do not change its identity.
+-            fingerprint = hash(Data((kind.rawValue + paths.sorted().joined(separator: "\u{0}")).utf8))
++            fingerprint = hash(Data(((folderAsGroup ? "group:" : "") + kind.rawValue + paths.sorted().joined(separator: "\u{0}")).utf8))
+         }
+         let item = ClipboardEntry(id: UUID(), kind: kind, fingerprint: fingerprint,
+             plainText: nil, filePaths: paths, payloadName: nil, thumbnailName: nil,
+             sourceAppName: "拖放导入", sourceBundleID: nil, createdAt: Date(),
+-            lastCopiedAt: Date(), copyCount: 1, isPinned: false)
++            lastCopiedAt: Date(), copyCount: 1, isPinned: false, folderAsGroup: folderAsGroup ? true : nil)
+         addToTransfer(item, recordDropInHistory: transferDropSavesHistory)
+     }
+ 
+@@ -991,7 +1041,7 @@
+                     record(kind: item.kind, fingerprint: item.fingerprint, text: item.plainText,
+                            paths: imageData == nil ? item.filePaths : [], payload: historyImageData,
+                            payloadExtension: item.firstFileURL?.pathExtension,
+-                           thumbnail: nil, sourceName: item.sourceAppName, sourceID: nil)
++                           thumbnail: nil, sourceName: item.sourceAppName, sourceID: nil, folderAsGroup: item.folderAsGroup == true)
+                 }
+             } catch {
+                 transferError = "加入中转站失败：\(error.localizedDescription.replacingOccurrences(of: "记事本", with: "中转站"))"
+--- a/SuperClipboard/SuperClipboard/ClipboardSettingsView.swift
++++ b/SuperClipboard/SuperClipboard/ClipboardSettingsView.swift
+@@ -51,6 +51,13 @@
+                 }
+                 .toggleStyle(.switch)
+                 .accessibilityLabel("拖入内容保存到历史记录")
++                Picker("拖入文件夹", selection: $store.folderDropMode) {
++                    Text("每次询问").tag("ask")
++                    Text("作为文件组").tag("group")
++                    Text("保留文件夹").tag("folder")
++                }
++                Text("文件组展开文件夹第一层内容；子文件夹和空文件夹保持完整。")
++                    .font(.system(size: 11)).foregroundStyle(ClipboardTheme.secondary)
+                 HStack(spacing: 8) {
+                     SettingsCopy("关闭后自动清空", detail: "重新打开中转站会取消倒计时。")
+                     Spacer(minLength: 8)
+--- a/SuperClipboard/SuperClipboard/ContentView.swift
++++ b/SuperClipboard/SuperClipboard/ContentView.swift
+@@ -509,14 +509,14 @@
+             }
+         case .file:
+             HStack(spacing: 12) {
+-                Image(systemName: item.filePaths.count > 1 ? "folder" : "doc")
++                Image(systemName: item.isFileGroup ? "doc.on.doc.fill" : "doc")
+                     .font(.system(size: 21, weight: .regular))
+                     .frame(width: 44, height: 48)
+                     .background(ClipboardTheme.cardSecondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+                     .accessibilityHidden(true)
+                 VStack(alignment: .leading, spacing: 5) {
+                     Text(item.title).font(.system(size: 14, weight: .medium)).lineLimit(2)
+-                    Text(item.filePaths.count > 1 ? "\(item.filePaths.count) 个文件" : "文件")
++                    Text(item.isFileGroup ? "文件组 · \(item.filePaths.count) 项" : "文件")
+                         .font(.system(size: 11))
+                         .foregroundStyle(ClipboardTheme.cardSecondary)
+                 }
+@@ -1665,7 +1665,7 @@
+                     mediaPreview(symbol: "play.rectangle.fill", title: item.title)
+                 }
+             case .file:
+-                mediaPreview(symbol: item.filePaths.count > 1 ? "folder.fill" : "doc.fill", title: item.title)
++                mediaPreview(symbol: item.isFileGroup ? "doc.on.doc.fill" : "doc.fill", title: item.title)
+             }
+         }
+         .foregroundStyle(ClipboardTheme.primary)
+--- a/SuperClipboard/SuperClipboard/TransferFileGroupCard.swift
++++ b/SuperClipboard/SuperClipboard/TransferFileGroupCard.swift
+@@ -151,7 +151,10 @@
+     var body: some View {
+         ZStack(alignment: .bottomTrailing) {
+             Group {
+-                if let image = preview?.image {
++                if isGroup {
++                    Image(systemName: "doc.on.doc.fill").resizable().scaledToFit().padding(10)
++                        .foregroundStyle(ClipboardTheme.toolbarAccent)
++                } else if let image = preview?.image {
+                     Image(decorative: image, scale: 1).resizable().scaledToFill()
+                 } else if !isGroup, let path = paths.first {
+                     Image(nsImage: NSWorkspace.shared.icon(forFile: path)).resizable().scaledToFit().padding(3)
+@@ -172,6 +175,7 @@
+         .frame(width: size, height: size)
+         .accessibilityHidden(true)
+         .task(id: request) {
++            guard !isGroup else { return }
+             let result = await ClipboardPreviewCache.shared.load(request)
+             guard !Task.isCancelled else { return }
+             preview = result

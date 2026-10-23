@@ -12,5 +12,7 @@
 *.py text eol=lf
 *.ps1 text eol=crlf
 *.iss text eol=crlf
+# Unified diffs require a space on blank context lines.
+patches/*.patch text eol=lf whitespace=-blank-at-eol
 *.png binary
 *.ico binary

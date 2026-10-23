@@ -27,6 +27,165 @@ void main() {
     );
   }
 
+  for (final identity in ['', 'unrecognized-external-identity']) {
+    test(
+      'external folder with identity "$identity" still asks and remembers grouping',
+      () async {
+        final folder = await Directory('${sandbox.path}/external').create();
+        await File('${folder.path}/first.txt').writeAsString('first');
+        expect(
+          await store.command({
+            'op': 'drop',
+            'data': {
+              'paths': [folder.path],
+              'fingerprint': identity,
+            },
+          }),
+          isTrue,
+        );
+        expect(store.transfer, isEmpty);
+        expect(store.folderDrops, hasLength(1));
+        expect(
+          await store.command({
+            'op': 'resolveFolderDrop',
+            'id': store.folderDrops.single['id'],
+            'choice': 'group',
+            'remember': true,
+          }),
+          isTrue,
+        );
+        expect(store.transfer.single.isFileGroup, isTrue);
+        expect(store.transfer.single.paths.single, endsWith('first.txt'));
+        final next = await Directory('${sandbox.path}/next').create();
+        await File('${next.path}/next.txt').writeAsString('next');
+        expect(
+          await store.command({
+            'op': 'drop',
+            'data': {
+              'paths': [next.path],
+              'fingerprint': identity,
+            },
+          }),
+          isTrue,
+        );
+        expect(store.folderDrops, isEmpty);
+        expect(store.transfer.first.isFileGroup, isTrue);
+        expect(store.transfer.first.paths.single, endsWith('next.txt'));
+      },
+    );
+  }
+
+  test(
+    'folder drops ask, remember choice, and preserve nested directories',
+    () async {
+      final folder = await Directory('${sandbox.path}/输入').create();
+      await File('${folder.path}/a.txt').writeAsString('a');
+      final nested = await Directory('${folder.path}/子文件夹').create();
+      await File('${nested.path}/b.txt').writeAsString('b');
+      await store.command({
+        'op': 'drop',
+        'data': {
+          'paths': [folder.path],
+        },
+      });
+      expect(store.transfer, isEmpty);
+      expect(store.folderDrops, hasLength(1));
+      await store.command({
+        'op': 'resolveFolderDrop',
+        'id': store.folderDrops.single['id'],
+        'choice': 'group',
+        'remember': true,
+      });
+      expect(store.folderDrops, isEmpty);
+      expect(store.settings['folderDropMode'], 'group');
+      final group = store.transfer.single;
+      expect(group.isFileGroup, isTrue);
+      expect(group.paths, hasLength(2));
+      expect(await File('${group.paths.last}/b.txt').readAsString(), 'b');
+      expect(await File('${folder.path}/a.txt').readAsString(), 'a');
+      final reopened = ClipboardStore(
+        directory: store.root,
+        usePlatform: false,
+      );
+      await reopened.initialize();
+      expect(reopened.settings['folderDropMode'], 'group');
+      expect(reopened.folderDrops, isEmpty);
+      expect(reopened.transfer.single.isFileGroup, isTrue);
+      reopened.dispose();
+    },
+  );
+
+  test(
+    'cancel leaves preferences and sources intact; preserve and reset work',
+    () async {
+      final folder = await Directory('${sandbox.path}/folder').create();
+      await File('${folder.path}/a.txt').writeAsString('a');
+      Future<void> drop() async {
+        await store.command({
+          'op': 'drop',
+          'data': {
+            'paths': [folder.path],
+          },
+        });
+      }
+
+      await drop();
+      await store.command({
+        'op': 'resolveFolderDrop',
+        'id': store.folderDrops.single['id'],
+        'choice': 'cancel',
+        'remember': true,
+      });
+      expect(store.settings['folderDropMode'], 'ask');
+      expect(store.transfer, isEmpty);
+      await drop();
+      await store.command({
+        'op': 'resolveFolderDrop',
+        'id': store.folderDrops.single['id'],
+        'choice': 'folder',
+        'remember': true,
+      });
+      expect(store.transfer.single.isFileGroup, isFalse);
+      expect(
+        await File('${store.transfer.single.paths.single}/a.txt')
+            .readAsString(),
+        'a',
+      );
+      await store.setting('folderDropMode', 'ask');
+      await drop();
+      expect(store.folderDrops, hasLength(1));
+    },
+  );
+
+  test(
+    'one-member groups survive archiving; empty folders retain their directory',
+    () async {
+      await store.setting('folderDropMode', 'group');
+      final folder = await Directory('${sandbox.path}/one').create();
+      await File('${folder.path}/only.txt').writeAsString('only');
+      await store.command({
+        'op': 'drop',
+        'data': {
+          'paths': [folder.path],
+        },
+      });
+      final group = store.transfer.single;
+      expect(group.isFileGroup, isTrue);
+      expect(group.paths, hasLength(1));
+      expect(ClipEntry.fromJson(group.toJson()).isFileGroup, isTrue);
+      final empty = await Directory('${sandbox.path}/empty').create();
+      await store.command({
+        'op': 'drop',
+        'data': {
+          'paths': [empty.path],
+        },
+      });
+      final saved = store.transfer.first;
+      expect(saved.isFileGroup, isFalse);
+      expect(await Directory(saved.paths.single).exists(), isTrue);
+    },
+  );
+
   test(
     'multi-file transfer dragged back as one folder is not duplicated',
     () async {

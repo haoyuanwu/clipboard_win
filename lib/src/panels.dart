@@ -1,5 +1,94 @@
 part of 'app.dart';
 
+class FolderDropDialog extends StatefulWidget {
+  const FolderDropDialog({super.key, required this.folders});
+  final List<String> folders;
+  @override
+  State<FolderDropDialog> createState() => _FolderDropDialogState();
+}
+
+class _FolderDropDialogState extends State<FolderDropDialog> {
+  bool remember = false;
+  @override
+  Widget build(BuildContext context) => FrostedDialog(
+    child: SizedBox(
+      width: 310,
+      child: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                CupertinoIcons.doc_on_doc_fill,
+                color: accent(context),
+                size: 32,
+              ),
+              const SizedBox(height: 14),
+              const Text(
+                '将文件夹作为文件组？',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                widget.folders
+                    .map((p) => p.replaceAll('\\', '/').split('/').last)
+                    .join('、'),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '作为文件组：展开第一层内容，便于逐项复制和拖出。子文件夹和空文件夹保持完整。',
+                style: TextStyle(fontSize: 12, color: secondary(context)),
+              ),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text('下次不再询问', style: TextStyle(fontSize: 13)),
+                value: remember,
+                onChanged: (v) => setState(() => remember = v ?? false),
+              ),
+              Text(
+                '可在设置 → 悬浮中转中修改。',
+                style: TextStyle(fontSize: 11, color: secondary(context)),
+              ),
+              const SizedBox(height: 14),
+              Wrap(
+                alignment: WrapAlignment.end,
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('取消'),
+                  ),
+                  OutlinedButton(
+                    onPressed: () => Navigator.pop(context, (
+                      choice: 'folder',
+                      remember: remember,
+                    )),
+                    child: const Text('保留文件夹'),
+                  ),
+                  FilledButton(
+                    onPressed: () => Navigator.pop(context, (
+                      choice: 'group',
+                      remember: remember,
+                    )),
+                    child: const Text('作为文件组'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 class PanelHeader extends StatelessWidget {
   const PanelHeader(this.title, this.close, {super.key});
   final String title;
@@ -546,8 +635,19 @@ class _VideoPreviewState extends State<VideoPreview> {
 }
 
 class SettingsPanel extends StatelessWidget {
-  const SettingsPanel({super.key, required this.store});
+  const SettingsPanel({
+    super.key,
+    required this.store,
+    this.shortcutsFirst = false,
+  });
   final ClipboardStore store;
+  final bool shortcutsFirst;
+  Widget _shortcuts(BuildContext context) => _section(context, '快捷键', [
+    ShortcutSettings(store: store, mode: 'popover'),
+    const Divider(),
+    ShortcutSettings(store: store, mode: 'transfer'),
+    _hint(context, '弹窗中按 Ctrl + 1–9 复制当前搜索结果。点击组合键可重新录制。'),
+  ]);
   @override
   Widget build(BuildContext context) => FrostedDialog(
     insetPadding: const EdgeInsets.all(10),
@@ -570,6 +670,7 @@ class SettingsPanel extends StatelessWidget {
                 child: ListView(
                   padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
                   children: [
+                    if (shortcutsFirst) _shortcuts(context),
                     _section(context, '通用与外观', [
                       _toggle(
                         context,
@@ -588,12 +689,7 @@ class SettingsPanel extends StatelessWidget {
                         (v) => store.setting('titleBarStyle', v),
                       ),
                     ]),
-                    _section(context, '快捷键', [
-                      ShortcutSettings(store: store, mode: 'popover'),
-                      const Divider(),
-                      ShortcutSettings(store: store, mode: 'transfer'),
-                      _hint(context, '弹窗中按 Ctrl + 1–9 复制当前搜索结果。点击组合键可重新录制。'),
-                    ]),
+                    if (!shortcutsFirst) _shortcuts(context),
                     _section(context, '历史记录', [
                       _select(context, '最多保留', store.settings['limit'], {
                         100: '100 条',
@@ -650,126 +746,42 @@ class SettingsPanel extends StatelessWidget {
                         ],
                       ),
                     ]),
-                    _section(context, '悬浮中转', [
-                      _toggle(
-                        context,
-                        '拖入内容同时保存到历史记录',
-                        store.settings['transferHistory'] == true,
-                        (v) => store.setting('transferHistory', v),
-                      ),
-                      _hint(context, '默认仅留在中转站，开启后同时收录。拖动文件到屏幕右上角可唤出收纳入口。'),
-                      Row(
-                        children: [
-                          const Text('关闭后清空'),
-                          const Spacer(),
-                          SizedBox(
-                            width: 48,
-                            height: 24,
-                            child: TextFormField(
-                              key: ValueKey(store.settings['transferMinutes']),
-                              initialValue:
-                                  '${store.settings['transferMinutes']}',
-                              textAlign: TextAlign.right,
-                              keyboardType: TextInputType.number,
-                              inputFormatters: [
-                                FilteringTextInputFormatter.digitsOnly,
-                              ],
-                              style: const TextStyle(
-                                fontFamily: ReplicaMetrics.fontFamily,
-                                fontSize: 13,
-                              ),
-                              decoration: InputDecoration(
-                                contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 5,
-                                  vertical: 2,
-                                ),
-                                filled: true,
-                                fillColor: control(context),
-                                border: OutlineInputBorder(
-                                  borderSide: BorderSide.none,
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                              ),
-                              onFieldSubmitted: (v) => store.setting(
-                                'transferMinutes',
-                                int.tryParse(v) ?? 10,
-                              ),
+                    TransferStorageSettings(store: store),
+                    if (store.error.isNotEmpty)
+                      Semantics(
+                        liveRegion: true,
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.errorContainer
+                                .withValues(alpha: .25),
+                            borderRadius: BorderRadius.circular(9),
+                            border: Border.all(
+                              color: Theme.of(context).colorScheme.error
+                                  .withValues(alpha: .2),
                             ),
                           ),
-                          const SizedBox(width: 6),
-                          Text(
-                            '分钟',
-                            style: TextStyle(color: secondary(context)),
-                          ),
-                          const SizedBox(width: 6),
-                          _stepper(context),
-                        ],
-                      ),
-                      _hint(
-                        context,
-                        '默认 10 分钟，支持 1–1440 分钟。重新打开取消倒计时，只清理中转副本。',
-                      ),
-                    ]),
-                    _section(context, '记事本', [
-                      InkWell(
-                        onTap: () => WindowsBridge.call(
-                          'openFolder',
-                          store.notebookPath,
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 6),
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Icon(
-                                CupertinoIcons.folder,
-                                size: 13,
-                                color: accent(context),
+                                CupertinoIcons.exclamationmark_circle,
+                                size: 16,
+                                color: Theme.of(context).colorScheme.error,
                               ),
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(
-                                  store.notebookPath,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
+                                  store.error,
                                   style: TextStyle(
-                                    fontFamily: ReplicaMetrics.fontFamily,
-                                    fontFamilyFallback:
-                                        ReplicaMetrics.fontFallback,
-                                    fontSize: 11,
-                                    color: accent(context),
+                                    color: Theme.of(context).colorScheme.error,
+                                    fontSize: 12,
+                                    height: 1.5,
                                   ),
                                 ),
                               ),
                             ],
                           ),
-                        ),
-                      ),
-                      _link(
-                        context,
-                        store.busy ? '正在保存或迁移…' : '更改保存位置…',
-                        store.busy
-                            ? null
-                            : () async {
-                                final path = await WindowsBridge.call<String>(
-                                  'chooseFolder',
-                                );
-                                if (path != null && path.isNotEmpty) {
-                                  await store.command({
-                                    'op': 'migrate',
-                                    'path': path,
-                                  });
-                                }
-                              },
-                      ),
-                      _hint(context, '加入时保存独立副本，永久保留；更改位置会迁移已有内容。'),
-                    ]),
-                    if (store.error.isNotEmpty)
-                      Text(
-                        store.error,
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.error,
-                          fontSize: 12,
                         ),
                       ),
                   ],
@@ -933,41 +945,6 @@ class SettingsPanel extends StatelessWidget {
                 ),
                 const Icon(CupertinoIcons.chevron_down, size: 10),
               ],
-            ),
-          ),
-        ),
-      ],
-    ),
-  );
-  Widget _stepper(BuildContext c) => Container(
-    width: 16,
-    height: 24,
-    decoration: BoxDecoration(
-      color: control(c),
-      borderRadius: BorderRadius.circular(4),
-    ),
-    child: Column(
-      children: [
-        Expanded(
-          child: InkWell(
-            onTap: () => store.setting(
-              'transferMinutes',
-              (store.settings['transferMinutes'] as int) + 1,
-            ),
-            child: const Center(
-              child: Icon(CupertinoIcons.chevron_up, size: 9),
-            ),
-          ),
-        ),
-        const Divider(height: 1),
-        Expanded(
-          child: InkWell(
-            onTap: () => store.setting(
-              'transferMinutes',
-              (store.settings['transferMinutes'] as int) - 1,
-            ),
-            child: const Center(
-              child: Icon(CupertinoIcons.chevron_down, size: 9),
             ),
           ),
         ),

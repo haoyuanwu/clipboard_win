@@ -18,6 +18,7 @@ part 'cards.dart';
 part 'mac_controls.dart';
 part 'windows_controls.dart';
 part 'alignment_controls.dart';
+part 'settings_storage.dart';
 
 class SuperClipboardApp extends StatelessWidget {
   const SuperClipboardApp({super.key, required this.store});
@@ -150,6 +151,10 @@ class _ClipboardHomeState extends State<ClipboardHome> {
   String? copiedId;
   int revision = -1;
   Timer? feedbackTimer, clockTimer;
+  bool folderDialogOpen = false;
+  int shortcutSettingsRevision = 0;
+  bool settingsDialogOpen = false;
+  final shortcutSettingsFocus = ValueNotifier(false);
   bool get popover => store.mode == 'popover';
   bool get transfer => store.mode == 'transfer';
   @override
@@ -158,6 +163,7 @@ class _ClipboardHomeState extends State<ClipboardHome> {
     if (transfer) library = 'transfer';
     store.addListener(_changed);
     _begin();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showFolderDrop());
     clockTimer = Timer.periodic(const Duration(minutes: 1), (_) {
       if (mounted) setState(() {});
     });
@@ -171,6 +177,14 @@ class _ClipboardHomeState extends State<ClipboardHome> {
   }
 
   void _changed() {
+    if (store.mode == 'main' &&
+        shortcutSettingsRevision != store.shortcutSettingsRevision) {
+      shortcutSettingsRevision = store.shortcutSettingsRevision;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _settings(shortcuts: true);
+      });
+      WidgetsBinding.instance.scheduleFrame();
+    }
     if (revision != store.sessionRevision) {
       if (popover) {
         library = 'history';
@@ -181,10 +195,40 @@ class _ClipboardHomeState extends State<ClipboardHome> {
     }
     if (lastSort != store.settings['sort']) _begin();
     if (mounted) setState(() {});
+    _showFolderDrop();
+  }
+
+  void _showFolderDrop() {
+    if (!mounted ||
+        !transfer ||
+        folderDialogOpen ||
+        store.folderDrops.isEmpty) {
+      return;
+    }
+    folderDialogOpen = true;
+    final pending = store.folderDrops.first;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final result = await showDialog<({String choice, bool remember})>(
+        context: context,
+        builder: (_) =>
+            FolderDropDialog(folders: List<String>.from(pending['folders'])),
+      );
+      await store.command({
+        'op': 'resolveFolderDrop',
+        'id': pending['id'],
+        'choice': result?.choice ?? 'cancel',
+        'remember': result?.remember ?? false,
+      });
+      folderDialogOpen = false;
+      _showFolderDrop();
+    });
+    WidgetsBinding.instance.scheduleFrame();
   }
 
   @override
   void dispose() {
+    shortcutSettingsFocus.dispose();
     store.removeListener(_changed);
     search.dispose();
     searchFocus.dispose();
@@ -282,6 +326,37 @@ class _ClipboardHomeState extends State<ClipboardHome> {
                   else
                     _mainHeader(context),
                   if (store.busy) const LinearProgressIndicator(minHeight: 2),
+                  if (store.shortcutConflicts.isNotEmpty)
+                    Material(
+                      color: Theme.of(context).colorScheme.errorContainer,
+                      child: InkWell(
+                        key: const ValueKey('shortcut-conflict-notice'),
+                        onTap: () {
+                          if (store.mode == 'main' || !store.usePlatform) {
+                            _settings(shortcuts: true);
+                          } else {
+                            WindowsBridge.call('shortcutSettings');
+                          }
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 9,
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  '${store.shortcutConflictMessage}。点击前往快捷键设置',
+                                  style: const TextStyle(fontSize: 11),
+                                ),
+                              ),
+                              const Icon(Icons.chevron_right, size: 18),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
                   if (library != 'notebook')
                     UnavailableRecordsBar(store: store, library: library),
                   if (store.error.isNotEmpty)
@@ -333,8 +408,7 @@ class _ClipboardHomeState extends State<ClipboardHome> {
                                   const SizedBox(height: 12),
                               itemBuilder: (context, i) {
                                 final e = items[i];
-                                final Widget card =
-                                    transfer && e.paths.length > 1
+                                final Widget card = transfer && e.isFileGroup
                                     ? TransferFileGroupCard(
                                         key: ValueKey(e.id),
                                         store: store,
@@ -354,7 +428,7 @@ class _ClipboardHomeState extends State<ClipboardHome> {
                                             : _detail(e),
                                         onContext: (p) => _context(e, p),
                                       );
-                                return transfer && e.paths.length > 1
+                                return transfer && e.isFileGroup
                                     ? card
                                     : EntryDragSource(
                                         store: store,
@@ -1018,11 +1092,28 @@ class _ClipboardHomeState extends State<ClipboardHome> {
     barrierColor: Colors.black.withValues(alpha: .16),
     builder: (_) => EntryDetail(store: store, entry: e),
   );
-  void _settings() => showDialog(
-    context: context,
-    barrierColor: Colors.black.withValues(alpha: .16),
-    builder: (_) => SettingsPanel(store: store),
-  );
+  Future<void> _settings({bool shortcuts = false}) async {
+    if (settingsDialogOpen) {
+      if (shortcuts) shortcutSettingsFocus.value = true;
+      return;
+    }
+    shortcutSettingsFocus.value = shortcuts;
+    settingsDialogOpen = true;
+    try {
+      await showDialog(
+        context: context,
+        barrierColor: Colors.black.withValues(alpha: .16),
+        builder: (_) => ValueListenableBuilder<bool>(
+          valueListenable: shortcutSettingsFocus,
+          builder: (_, shortcuts, _) =>
+              SettingsPanel(store: store, shortcutsFirst: shortcuts),
+        ),
+      );
+    } finally {
+      settingsDialogOpen = false;
+    }
+  }
+
   void _about() => showDialog(
     context: context,
     barrierColor: Colors.black.withValues(alpha: .16),

@@ -157,19 +157,30 @@ class _HistoryCardState extends State<HistoryCard> {
                             overflow: TextOverflow.ellipsis,
                             child: Row(
                               children: [
-                                Flexible(
-                                  child: Text(timestamp(e.lastCopiedAt)),
+                                Expanded(
+                                  child: Row(
+                                    children: [
+                                      Flexible(
+                                        child: Text(timestamp(e.lastCopiedAt)),
+                                      ),
+                                      const Text('  ·  '),
+                                      const Icon(
+                                        CupertinoIcons.doc_on_doc,
+                                        size: 12,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text('${e.count}'),
+                                      if (e.pinned) ...[
+                                        const SizedBox(width: 7),
+                                        const Icon(
+                                          CupertinoIcons.pin_fill,
+                                          size: 12,
+                                        ),
+                                      ],
+                                    ],
+                                  ),
                                 ),
-                                const Text('  ·  '),
-                                const Icon(CupertinoIcons.doc_on_doc, size: 12),
-                                const SizedBox(width: 4),
-                                Text('${e.count}'),
-                                if (e.pinned) ...[
-                                  const SizedBox(width: 7),
-                                  const Icon(CupertinoIcons.pin_fill, size: 12),
-                                ],
                                 const SizedBox(width: 8),
-                                const Spacer(),
                                 ConstrainedBox(
                                   constraints: const BoxConstraints(
                                     maxWidth: 120,
@@ -241,28 +252,31 @@ class SourceIcon extends StatelessWidget {
   const SourceIcon(this.path, {super.key});
   final String path;
   @override
-  Widget build(BuildContext context) => path.isEmpty
-      ? SizedBox(
-          width: 20,
-          height: 20,
-          child: Center(
-            child: Icon(
-              CupertinoIcons.app_fill,
-              size: 14,
-              color: secondary(context),
-            ),
-          ),
-        )
-      : Image.file(
-          File(path),
-          width: 20,
-          height: 20,
-          errorBuilder: (_, _, _) => Icon(
-            CupertinoIcons.app_fill,
-            size: 20,
-            color: secondary(context),
-          ),
-        );
+  Widget build(BuildContext context) {
+    final fallback = Icon(
+      CupertinoIcons.app_fill,
+      size: 16,
+      color: secondary(context),
+    );
+    return SizedBox.square(
+      dimension: 20,
+      child: Center(
+        child: SizedBox.square(
+          dimension: 16,
+          child: path.isEmpty
+              ? fallback
+              : Image.file(
+                  File(path),
+                  fit: BoxFit.contain,
+                  alignment: Alignment.center,
+                  frameBuilder: (_, child, frame, synchronous) =>
+                      synchronous || frame != null ? child : fallback,
+                  errorBuilder: (_, _, _) => fallback,
+                ),
+        ),
+      ),
+    );
+  }
 }
 
 class EntryContent extends StatelessWidget {
@@ -357,8 +371,11 @@ class EntryContent extends StatelessWidget {
               borderRadius: BorderRadius.circular(10),
             ),
             child: Icon(
-              e.paths.length > 1 ? CupertinoIcons.folder : CupertinoIcons.doc,
+              e.isFileGroup
+                  ? CupertinoIcons.doc_on_doc_fill
+                  : CupertinoIcons.doc,
               size: 21,
+              semanticLabel: e.isFileGroup ? '文件组' : '文件',
             ),
           ),
           const SizedBox(width: 12),
@@ -380,7 +397,7 @@ class EntryContent extends StatelessWidget {
                 ),
                 const SizedBox(height: 5),
                 Text(
-                  e.paths.length > 1 ? '${e.paths.length} 个文件' : '文件',
+                  e.isFileGroup ? '文件组 · ${e.paths.length} 项' : '文件',
                   style: TextStyle(fontSize: 11, color: secondary(context)),
                 ),
               ],

@@ -5,6 +5,7 @@
 #include <iostream>
 #include <cstring>
 #include <vector>
+#include <shellapi.h>
 using clipboard_native::Value;
 using clipboard_native::Map;
 class VirtualFiles : public IDataObject {
@@ -57,12 +58,45 @@ class VirtualFiles : public IDataObject {
   std::vector<std::string> contents{"first virtual file", "second stream"};
  private: ULONG refs_ = 1;
 };
+class LocalFolder : public VirtualFiles {
+ public:
+  std::wstring path;
+  std::string identity;
+  HRESULT STDMETHODCALLTYPE GetData(FORMATETC* format, STGMEDIUM* medium) override {
+    *medium = {};
+    if (format->cfFormat == CF_HDROP) {
+      const auto bytes = sizeof(DROPFILES) + (path.size() + 2) * sizeof(wchar_t);
+      auto memory = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, bytes);
+      auto drop = static_cast<DROPFILES*>(GlobalLock(memory));
+      drop->pFiles = sizeof(DROPFILES); drop->fWide = TRUE;
+      memcpy(reinterpret_cast<char*>(drop) + sizeof(DROPFILES), path.c_str(), path.size() * sizeof(wchar_t));
+      GlobalUnlock(memory);
+      medium->tymed = TYMED_HGLOBAL; medium->hGlobal = memory; return S_OK;
+    }
+    if (format->cfFormat == RegisterClipboardFormat(L"SuperClipboard.Entry") && !identity.empty()) {
+      auto memory = GlobalAlloc(GMEM_MOVEABLE, identity.size() + 1);
+      auto data = GlobalLock(memory); memcpy(data, identity.c_str(), identity.size() + 1); GlobalUnlock(memory);
+      medium->tymed = TYMED_HGLOBAL; medium->hGlobal = memory; return S_OK;
+    }
+    return DV_E_FORMATETC;
+  }
+};
 int main(int argc, char** argv) {
   if (argc != 2) return 2;
   CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   const auto root = std::filesystem::absolute(argv[1]);
   std::filesystem::create_directories(root);
   clipboard_native::SetCache(clipboard_native::Utf8(root.wstring()));
+  auto local = new LocalFolder;
+  local->path = root.wstring();
+  auto localValue = clipboard_native::Read(nullptr, local);
+  const auto* localData = std::get_if<Map>(&localValue);
+  if (!localData || localData->count(Value("fingerprint")) || !localData->count(Value("paths"))) return 20;
+  local->identity = "known-internal-group";
+  localValue = clipboard_native::Read(nullptr, local);
+  localData = std::get_if<Map>(&localValue);
+  if (!localData || clipboard_native::String(*localData, "fingerprint") != local->identity) return 21;
+  local->Release();
   auto source = new VirtualFiles;
   auto value = clipboard_native::Read(nullptr, source);
   const auto* data = std::get_if<Map>(&value);
@@ -84,6 +118,6 @@ int main(int argc, char** argv) {
     if (!std::filesystem::is_empty(root)) return 10 + failure;
   }
   source->Release(); CoUninitialize();
-  std::cout << "Virtual files: mixed HGLOBAL/IStream, atomic failure, path validation and size validation passed.\n";
+  std::cout << "Local folder drag identity and virtual files: mixed HGLOBAL/IStream, atomic failure, path validation and size validation passed.\n";
   return 0;
 }

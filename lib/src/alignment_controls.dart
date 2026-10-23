@@ -454,6 +454,7 @@ class _FileCover extends StatelessWidget {
       group ? CupertinoIcons.folder_fill : CupertinoIcons.doc,
       size: size * .55,
       color: accent(context),
+      semanticLabel: group ? '文件组' : '文件',
     );
     return Stack(
       clipBehavior: Clip.none,
@@ -466,7 +467,7 @@ class _FileCover extends StatelessWidget {
             color: control(context),
             borderRadius: BorderRadius.circular(9),
           ),
-          child: images.isEmpty
+          child: group || images.isEmpty
               ? icon
               : Image.file(
                   File(images.first),
@@ -591,7 +592,7 @@ class _ShortcutSettingsState extends State<ShortcutSettings> {
     if (mounted) {
       setState(() {
         recording = false;
-        message = ok ? '' : '快捷键已被占用，请选择其他组合。';
+        message = ok ? '' : '${next['label']} 已被占用，请选择其他组合。';
       });
     }
   }
@@ -708,6 +709,15 @@ class _ShortcutSettingsState extends State<ShortcutSettings> {
             ),
           ],
         ),
+        if (message.isEmpty &&
+            widget.store.shortcutConflicts.containsKey(widget.mode))
+          Text(
+            '${widget.store.shortcutConflicts[widget.mode]} 已被占用，请重新录制或停用。',
+            style: TextStyle(
+              fontSize: 11,
+              color: Theme.of(context).colorScheme.error,
+            ),
+          ),
         if (message.isNotEmpty)
           Text(
             message,
