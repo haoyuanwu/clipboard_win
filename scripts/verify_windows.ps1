@@ -26,7 +26,7 @@ if ($uiMain -eq [IntPtr]::Zero) {throw 'Main window missing'}
 $uiRect = New-Object ClipboardUi+RECT
 [ClipboardUi]::GetClientRect($uiMain,[ref]$uiRect) | Out-Null
 $uiWidth=$uiRect.right/([ClipboardUi]::GetDpiForWindow($uiMain)/96.0)
-if($MacStyle){[ClipboardUi]::Click($uiMain,($uiWidth-103),23)}else{[ClipboardUi]::Click($uiMain,($uiWidth-95),54)}
+if($MacStyle){[ClipboardUi]::Click($uiMain,($uiWidth-65),26)}else{[ClipboardUi]::Click($uiMain,($uiWidth-61),54)}
 Start-Sleep -Milliseconds 1400
 $uiTransfer=(Get-ClipboardTestWindow '悬浮中转')
 if ($uiTransfer -eq [IntPtr]::Zero) {throw 'Transfer window missing'}

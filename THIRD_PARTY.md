@@ -1,6 +1,6 @@
 # 第三方组件
 
-应用图标与交互参考来自 https://github.com/haoyuanwu/SuperClipboard 。
+应用图标与交互参考来自 [haoyuanwu/SuperClipboard 1.3.2](https://github.com/haoyuanwu/SuperClipboard/tree/63416c3ab0518c3cf2a07ed5c17a411be117b8d6)。新版应用图标使用 Design/Brand/SuperClipboard-box-logo.png；Windows ICO 为该素材的多尺寸封装，黑白托盘资源来自 MenuBarLogo-3x.png，并适配 Windows 任务栏明暗。
 
 Flutter、Dart 和所用 Dart/Flutter 包的授权文本随 Flutter 运行资源提供，位于 data/flutter_assets/NOTICES.Z。
 

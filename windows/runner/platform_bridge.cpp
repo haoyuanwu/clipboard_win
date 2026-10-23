@@ -17,6 +17,14 @@ namespace {
 constexpr UINT kTray = WM_APP + 31;
 constexpr UINT_PTR kClipboardRetry = 42;
 constexpr UINT_PTR kTrayVisibility = 43;
+constexpr UINT_PTR kReceiverPoll = 44;
+constexpr int kPopoverHotkey = 100, kTransferHotkey = 101;
+struct Shortcut { UINT modifiers = MOD_CONTROL | MOD_ALT, key = 0; bool enabled = true; };
+std::map<int, Shortcut> shortcuts;
+HWND receiver_window = nullptr;
+bool exporting_drag = false;
+POINT drag_origin{};
+bool mouse_was_down = false;
 int tray_visibility_attempts = 0;
 std::map<std::string, PlatformBridge*> bridges;
 std::vector<std::unique_ptr<FlutterWindow>> extra_windows;
@@ -30,6 +38,61 @@ UINT show_main = RegisterWindowMessage(L"SuperClipboard.ShowMain");
 bool Bool(const Map& m, const char* key) {
   auto it = m.find(Value(key));
   return it != m.end() && std::holds_alternative<bool>(it->second) && std::get<bool>(it->second);
+}
+bool SetShortcut(HWND window, int id, const Map& value) {
+  Shortcut next;
+  next.enabled = Bool(value, "enabled");
+  auto integer = [&](const char* key) -> UINT {
+    auto it = value.find(Value(key));
+    if (it == value.end()) return 0;
+    if (auto n = std::get_if<int32_t>(&it->second)) return static_cast<UINT>(*n);
+    if (auto n = std::get_if<int64_t>(&it->second)) return static_cast<UINT>(*n);
+    return 0;
+  };
+  next.modifiers = integer("modifiers"); next.key = integer("key");
+  if (next.enabled && (!next.key || !(next.modifiers & (MOD_CONTROL | MOD_ALT | MOD_WIN)))) return false;
+  const auto previous = shortcuts.find(id);
+  const auto old = previous == shortcuts.end() ? Shortcut{0, 0, false} : previous->second;
+  UnregisterHotKey(window, id);
+  if (next.enabled && !RegisterHotKey(window, id, next.modifiers | MOD_NOREPEAT, next.key)) {
+    if (old.enabled && old.key) RegisterHotKey(window, id, old.modifiers | MOD_NOREPEAT, old.key);
+    return false;
+  }
+  shortcuts[id] = next;
+  return true;
+}
+LRESULT CALLBACK ReceiverProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
+  if (message == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
+  if (message == WM_PAINT) {
+    PAINTSTRUCT paint; auto dc = BeginPaint(hwnd, &paint);
+    RECT rect; GetClientRect(hwnd, &rect);
+    auto brush = CreateSolidBrush(RGB(235, 242, 252)); FillRect(dc, &rect, brush); DeleteObject(brush);
+    SetBkMode(dc, TRANSPARENT); SetTextColor(dc, RGB(31, 71, 137));
+    const int size = -MulDiv(13, GetDpiForWindow(hwnd), 72);
+    auto font = CreateFont(size, 0, 0, 0, FW_MEDIUM, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+      OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
+    auto old = SelectObject(dc, font);
+    DrawText(dc, L"放入悬浮中转\n松开即可收纳文件", -1, &rect, DT_CENTER | DT_VCENTER | DT_WORDBREAK);
+    SelectObject(dc, old); DeleteObject(font); EndPaint(hwnd, &paint); return 0;
+  }
+  return DefWindowProc(hwnd, message, wp, lp);
+}
+void PollReceiver() {
+  const bool down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+  POINT point; GetCursorPos(&point);
+  if (down && !mouse_was_down) drag_origin = point;
+  mouse_was_down = down;
+  if (!receiver_window) return;
+  if (!down || exporting_drag) { ShowWindow(receiver_window, SW_HIDE); return; }
+  MONITORINFO monitor{sizeof(monitor)};
+  GetMonitorInfo(MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST), &monitor);
+  const int scale = static_cast<int>(GetDpiForWindow(receiver_window));
+  const int w = MulDiv(190, scale, 96), h = MulDiv(90, scale, 96), margin = MulDiv(16, scale, 96);
+  const bool moved = abs(point.x - drag_origin.x) + abs(point.y - drag_origin.y) > MulDiv(16, scale, 96);
+  const bool near_corner = point.x > monitor.rcWork.right - w - margin * 2 && point.y < monitor.rcWork.top + h + margin * 2;
+  if (moved && near_corner) SetWindowPos(receiver_window, HWND_TOPMOST, monitor.rcWork.right - w - margin,
+    monitor.rcWork.top + margin, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+  else ShowWindow(receiver_window, SW_HIDE);
 }
 // Windows 11 stores the user's per-icon preference here. Set only this app's
 // first-run default; a subsequent manual choice to hide it remains respected.
@@ -68,10 +131,16 @@ bool EnsureTrayVisibleByDefault() {
   RegCloseKey(root);
   return found;
 }
+HICON TrayThemeIcon() {
+  DWORD light = 1, bytes = sizeof(light);
+  RegGetValue(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+    L"SystemUsesLightTheme", RRF_RT_REG_DWORD, nullptr, &light, &bytes);
+  return LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(light ? IDI_TRAY_LIGHT : IDI_TRAY_DARK));
+}
 void TrayIcon(HWND hwnd) {
   tray = {}; tray.cbSize = sizeof(tray); tray.hWnd = hwnd; tray.uID = 1;
   tray.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP; tray.uCallbackMessage = kTray;
-  tray.hIcon = LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_APP_ICON));
+  tray.hIcon = TrayThemeIcon();
   wcscpy_s(tray.szTip, L"SuperClipboard");
   Shell_NotifyIcon(NIM_ADD, &tray);
   tray_visibility_attempts = 0;
@@ -80,7 +149,7 @@ void TrayIcon(HWND hwnd) {
 }
 class PlatformBridge::DropTarget : public IDropTarget {
  public:
-  explicit DropTarget(PlatformBridge* owner) : owner_(owner) {}
+  explicit DropTarget(PlatformBridge* owner, bool receiver = false) : owner_(owner), receiver_(receiver) {}
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
     if (iid == IID_IUnknown || iid == IID_IDropTarget) { *out = this; AddRef(); return S_OK; }
     *out = nullptr; return E_NOINTERFACE;
@@ -90,9 +159,9 @@ class PlatformBridge::DropTarget : public IDropTarget {
   HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* object, DWORD, POINTL, DWORD* effect) override {
     accepted_ = false;
     for (auto cf : {static_cast<CLIPFORMAT>(CF_HDROP), static_cast<CLIPFORMAT>(CF_UNICODETEXT),
-        static_cast<CLIPFORMAT>(CF_DIB), static_cast<CLIPFORMAT>(RegisterClipboardFormat(L"PNG"))}) {
+        static_cast<CLIPFORMAT>(CF_DIB), static_cast<CLIPFORMAT>(RegisterClipboardFormat(CFSTR_FILEDESCRIPTORW)), static_cast<CLIPFORMAT>(RegisterClipboardFormat(L"PNG"))}) {
       FORMATETC f{cf, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
-      if (SUCCEEDED(object->QueryGetData(&f))) accepted_ = true;
+      if ((!receiver_ || cf == CF_HDROP || cf == RegisterClipboardFormat(CFSTR_FILEDESCRIPTORW)) && SUCCEEDED(object->QueryGetData(&f))) accepted_ = true;
     }
     *effect = accepted_ ? DROPEFFECT_COPY : DROPEFFECT_NONE;
     owner_->Notify("dropHover", Value(accepted_)); return S_OK;
@@ -103,14 +172,15 @@ class PlatformBridge::DropTarget : public IDropTarget {
   HRESULT STDMETHODCALLTYPE DragLeave() override { owner_->Notify("dropHover", Value(false)); return S_OK; }
   HRESULT STDMETHODCALLTYPE Drop(IDataObject* object, DWORD, POINTL, DWORD* effect) override {
     owner_->Notify("dropHover", Value(false));
-    Value data = clipboard_native::Read(owner_->window_, object);
+    if (receiver_) ShowWindow(receiver_window, SW_HIDE);
+    Value data = accepted_ ? clipboard_native::Read(owner_->window_, object) : Value();
     if (std::holds_alternative<Map>(data)) {
       owner_->Notify("drop", data); *effect = DROPEFFECT_COPY;
     } else { *effect = DROPEFFECT_NONE; }
     return S_OK;
   }
  private:
-  ULONG refs_ = 1; PlatformBridge* owner_; bool accepted_ = false;
+  ULONG refs_ = 1; PlatformBridge* owner_; bool accepted_ = false, receiver_ = false;
 };
 
 PlatformBridge::PlatformBridge(flutter::BinaryMessenger* messenger, HWND window,
@@ -126,6 +196,25 @@ PlatformBridge::PlatformBridge(flutter::BinaryMessenger* messenger, HWND window,
       SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED | SWP_NOACTIVATE);
   } else {
     TrayIcon(window_);
+    WNDCLASS wc{}; wc.lpfnWndProc = ReceiverProc; wc.hInstance = GetModuleHandle(nullptr);
+    wc.lpszClassName = L"SuperClipboard.DragReceiver"; wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    RegisterClass(&wc);
+    receiver_window = CreateWindowEx(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
+      wc.lpszClassName, L"SuperClipboard 文件收纳", WS_POPUP, 0, 0, 190, 90, window_, nullptr, wc.hInstance, nullptr);
+    if (receiver_window) {
+      SetLayeredWindowAttributes(receiver_window, 0, 232, LWA_ALPHA);
+      const DWM_WINDOW_CORNER_PREFERENCE round = DWMWCP_ROUND;
+      DwmSetWindowAttribute(receiver_window, DWMWA_WINDOW_CORNER_PREFERENCE, &round, sizeof(round));
+      struct Accent { int state; DWORD flags, tint, animation; };
+      struct Composition { int attribute; void* data; SIZE_T size; };
+      using SetComposition = BOOL(WINAPI*)(HWND, Composition*);
+      auto set_composition = reinterpret_cast<SetComposition>(GetProcAddress(GetModuleHandle(L"user32.dll"), "SetWindowCompositionAttribute"));
+      if (set_composition) { Accent accent{4, 2, 0x30ffffff, 0}; Composition composition{19, &accent, sizeof(accent)}; set_composition(receiver_window, &composition); }
+      auto target = new DropTarget(this, true);
+      if (FAILED(RegisterDragDrop(receiver_window, target))) { DestroyWindow(receiver_window); receiver_window = nullptr; }
+      target->Release();
+      if (receiver_window) SetTimer(window_, kReceiverPoll, 50, nullptr);
+    }
   }
   const DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
   DwmSetWindowAttribute(window_, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
@@ -143,6 +232,22 @@ PlatformBridge::PlatformBridge(flutter::BinaryMessenger* messenger, HWND window,
       if (args) shared_state = *args;
       for (auto& [mode, bridge] : bridges) if (mode != "main") bridge->Notify("state", shared_state);
       result->Success();
+    } else if (method == "setShortcut" || method == "setShortcuts") {
+      auto main = bridges.find("main");
+      if (main == bridges.end() || !map) { result->Success(Value(false)); return; }
+      bool ok = true;
+      if (method == "setShortcut") {
+        auto it = map->find(Value("shortcut"));
+        const auto* value = it == map->end() ? nullptr : std::get_if<Map>(&it->second);
+        ok = value && SetShortcut(main->second->window_, clipboard_native::String(*map, "mode") == "popover" ? kPopoverHotkey : kTransferHotkey, *value);
+      } else {
+        for (auto name : {"popover", "transfer"}) {
+          auto it = map->find(Value(name));
+          const auto* value = it == map->end() ? nullptr : std::get_if<Map>(&it->second);
+          if (value && !SetShortcut(main->second->window_, std::string(name) == "popover" ? kPopoverHotkey : kTransferHotkey, *value)) ok = false;
+        }
+      }
+      result->Success(Value(ok));
     } else if (method == "glassAppearance") {
       if (mode_ != "main") ConfigureGlass(map && Bool(*map, "dark"), map && Bool(*map, "opaque"));
       result->Success();
@@ -207,7 +312,12 @@ PlatformBridge::PlatformBridge(flutter::BinaryMessenger* messenger, HWND window,
     } else if (method == "thumbnail") {
       result->Success(Value(map ? clipboard_native::Thumbnail(clipboard_native::String(*map, "path")) : ""));
     } else if (method == "startDrag") {
-      if (map) clipboard_native::Drag(window_, *map);
+      if (map) {
+        exporting_drag = true;
+        if (receiver_window) ShowWindow(receiver_window, SW_HIDE);
+        clipboard_native::Drag(window_, *map);
+        exporting_drag = false; Notify("dropHover", Value(false));
+      }
       result->Success();
     } else if (method == "reveal" || method == "openFolder") {
       if (args && std::holds_alternative<std::string>(*args)) {
@@ -259,7 +369,11 @@ PlatformBridge::PlatformBridge(flutter::BinaryMessenger* messenger, HWND window,
 }
 PlatformBridge::~PlatformBridge() {
   bridges.erase(mode_);
-  if (mode_ == "main") { RemoveClipboardFormatListener(window_); Shell_NotifyIcon(NIM_DELETE, &tray); }
+  if (mode_ == "main") {
+    UnregisterHotKey(window_, kPopoverHotkey); UnregisterHotKey(window_, kTransferHotkey);
+    KillTimer(window_, kReceiverPoll);
+    if (receiver_window) { RevokeDragDrop(receiver_window); DestroyWindow(receiver_window); receiver_window = nullptr; }
+    RemoveClipboardFormatListener(window_); Shell_NotifyIcon(NIM_DELETE, &tray); }
   if (drop_) { RevokeDragDrop(view_); RevokeDragDrop(window_); drop_->Release(); }
 }
 void PlatformBridge::ConfigureGlass(bool dark, bool opaque) {
@@ -295,6 +409,7 @@ void PlatformBridge::Notify(const std::string& method, const Value& value) {
   channel_->InvokeMethod(method, std::make_unique<Value>(value));
 }
 void PlatformBridge::Hide() {
+  Notify("dropHover", Value(false));
   ShowWindow(window_, SW_HIDE);
   if (mode_ == "transfer" && bridges.count("main")) bridges["main"]->Notify("transferVisibility", Value(false));
 }
@@ -329,6 +444,9 @@ std::optional<LRESULT> PlatformBridge::Handle(UINT message, WPARAM wp, LPARAM lp
   if (message == show_main && mode_ == "main") { ShowWindowForMode("main"); return 0; }
   if (message == taskbar_created && mode_ == "main") { TrayIcon(window_); return 0; }
   switch (message) {
+    case WM_SETTINGCHANGE:
+      if (mode_ == "main") { tray.hIcon = TrayThemeIcon(); Shell_NotifyIcon(NIM_MODIFY, &tray); }
+      break;
     case WM_CLOSE:
       if (!quitting) { Hide(); return 0; } break;
     case WM_CLIPBOARDUPDATE:
@@ -337,7 +455,16 @@ std::optional<LRESULT> PlatformBridge::Handle(UINT message, WPARAM wp, LPARAM lp
         if (sequence != observed_sequence) { observed_sequence = sequence; Notify("clipboardChanged"); }
       }
       return 0;
+    case WM_HOTKEY:
+      if (mode_ == "main" && (wp == kPopoverHotkey || wp == kTransferHotkey)) {
+        const std::string mode = wp == kPopoverHotkey ? "popover" : "transfer";
+        if (bridges.count(mode) && IsWindowVisible(bridges[mode]->window_)) bridges[mode]->Hide();
+        else ShowWindowForMode(mode);
+        return 0;
+      }
+      break;
     case WM_TIMER:
+      if (wp == kReceiverPoll && mode_ == "main") { PollReceiver(); return 0; }
       if (wp == kTrayVisibility) {
         if (EnsureTrayVisibleByDefault() || ++tray_visibility_attempts >= 10) KillTimer(window_, kTrayVisibility);
         return 0;
@@ -345,6 +472,7 @@ std::optional<LRESULT> PlatformBridge::Handle(UINT message, WPARAM wp, LPARAM lp
       if (wp == kClipboardRetry) { KillTimer(window_, kClipboardRetry); Notify("clipboardChanged"); return 0; }
       break;
     case WM_ACTIVATE:
+      if (ready_) Notify("windowFocus", Value(LOWORD(wp) != WA_INACTIVE));
       if (mode_ == "popover" && LOWORD(wp) == WA_INACTIVE) Hide();
       break;
     case WM_SIZE:

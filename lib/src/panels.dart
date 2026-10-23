@@ -50,10 +50,21 @@ class EntryDetail extends StatefulWidget {
 }
 
 class _EntryDetailState extends State<EntryDetail> {
+  void changed() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    widget.store.addListener(changed);
+  }
+
   bool copied = false, failed = false;
   Timer? _timer;
   @override
   void dispose() {
+    widget.store.removeListener(changed);
     _timer?.cancel();
     super.dispose();
   }
@@ -61,6 +72,7 @@ class _EntryDetailState extends State<EntryDetail> {
   @override
   Widget build(BuildContext context) {
     final e = widget.entry;
+    final status = widget.store.status(e);
     return FrostedDialog(
       insetPadding: const EdgeInsets.all(10),
       child: ClipRRect(
@@ -143,7 +155,26 @@ class _EntryDetailState extends State<EntryDetail> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          if (e.kind == EntryKind.video && e.paths.isNotEmpty)
+                          if (status.isMissing) ...[
+                            MissingEntryPlaceholder(entry: e),
+                            TextButton(
+                              onPressed: () async {
+                                final ok = await widget.store.command({
+                                  'op': 'delete',
+                                  'id': e.id,
+                                  'library': e.library,
+                                });
+                                if (ok && context.mounted) {
+                                  Navigator.pop(context);
+                                }
+                              },
+                              child: const Text(
+                                '移除这条失效记录',
+                                style: TextStyle(fontSize: 12),
+                              ),
+                            ),
+                          ] else if (e.kind == EntryKind.video &&
+                              e.paths.isNotEmpty)
                             VideoPreview(path: e.paths.first)
                           else if (e.kind != EntryKind.file)
                             ConstrainedBox(
@@ -185,8 +216,14 @@ class _EntryDetailState extends State<EntryDetail> {
                                   ),
                                   const SizedBox(height: 10),
                                   InkWell(
-                                    onTap: () =>
-                                        WindowsBridge.call('reveal', path),
+                                    onTap:
+                                        status.total > 0 &&
+                                            !status.validPaths.contains(path)
+                                        ? null
+                                        : () => WindowsBridge.call(
+                                            'reveal',
+                                            path,
+                                          ),
                                     borderRadius: BorderRadius.circular(8),
                                     child: Container(
                                       padding: const EdgeInsets.all(10),
@@ -334,23 +371,25 @@ class _EntryDetailState extends State<EntryDetail> {
                                   borderRadius: BorderRadius.circular(10),
                                 ),
                               ),
-                              onPressed: () async {
-                                if (copied) return;
-                                final ok = await widget.store.copy(e);
-                                if (!mounted) return;
-                                setState(() {
-                                  copied = ok;
-                                  failed = !ok;
-                                });
-                                if (ok) {
-                                  _timer = Timer(
-                                    const Duration(milliseconds: 400),
-                                    () {
-                                      if (mounted) Navigator.pop(context);
+                              onPressed: status.isMissing
+                                  ? null
+                                  : () async {
+                                      if (copied) return;
+                                      final ok = await widget.store.copy(e);
+                                      if (!mounted) return;
+                                      setState(() {
+                                        copied = ok;
+                                        failed = !ok;
+                                      });
+                                      if (ok) {
+                                        _timer = Timer(
+                                          const Duration(milliseconds: 400),
+                                          () {
+                                            if (mounted) Navigator.pop(context);
+                                          },
+                                        );
+                                      }
                                     },
-                                  );
-                                }
-                              },
                               child: Icon(
                                 copied
                                     ? CupertinoIcons.checkmark
@@ -514,8 +553,8 @@ class SettingsPanel extends StatelessWidget {
     insetPadding: const EdgeInsets.all(10),
     child: SizedBox(
       key: const ValueKey('settings-panel'),
-      width: ReplicaMetrics.panelSize.width,
-      height: ReplicaMetrics.panelSize.height,
+      width: 420,
+      height: 560,
       child: ListenableBuilder(
         listenable: store,
         builder: (context, _) => Column(
@@ -531,15 +570,16 @@ class SettingsPanel extends StatelessWidget {
                 child: ListView(
                   padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
                   children: [
-                    _section(context, '通用', [
+                    _section(context, '通用与外观', [
                       _toggle(
                         context,
                         '开机启动',
                         store.settings['startup'] == true,
                         (v) => store.setting('startup', v),
                       ),
-                    ]),
-                    _section(context, '外观', [
+                      _hint(context, '登录 Windows 后，自动准备好剪贴板。'),
+                      const SizedBox(height: 8),
+                      AppearanceChoices(store: store),
                       _select(
                         context,
                         '标题栏样式',
@@ -547,11 +587,12 @@ class SettingsPanel extends StatelessWidget {
                         {'windows': 'Windows', 'mac': 'macOS'},
                         (v) => store.setting('titleBarStyle', v),
                       ),
-                      _select(context, '显示模式', store.settings['appearance'], {
-                        'light': '浅色',
-                        'dark': '深色',
-                        'system': '跟随系统',
-                      }, (v) => store.setting('appearance', v)),
+                    ]),
+                    _section(context, '快捷键', [
+                      ShortcutSettings(store: store, mode: 'popover'),
+                      const Divider(),
+                      ShortcutSettings(store: store, mode: 'transfer'),
+                      _hint(context, '弹窗中按 Ctrl + 1–9 复制当前搜索结果。点击组合键可重新录制。'),
                     ]),
                     _section(context, '历史记录', [
                       _select(context, '最多保留', store.settings['limit'], {
@@ -560,38 +601,54 @@ class SettingsPanel extends StatelessWidget {
                         1000: '1000 条',
                       }, (v) => store.setting('limit', v)),
                       _hint(context, '重复内容合并计数，置顶记录不会自动清理。'),
-                      _link(context, '清空未置顶记录', () async {
-                        final ok = await showDialog<bool>(
-                          context: context,
-                          barrierColor: Colors.black.withValues(alpha: .16),
-                          builder: (c) => AlertDialog(
-                            title: const Text(
-                              '清空未置顶记录？',
-                              style: TextStyle(fontSize: 14),
-                            ),
-                            content: const Text(
-                              '记事本与原始文件会保留。',
-                              style: TextStyle(fontSize: 12),
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(c, false),
-                                child: const Text('取消'),
-                              ),
-                              TextButton(
-                                onPressed: () => Navigator.pop(c, true),
-                                child: const Text('清空'),
-                              ),
-                            ],
+                      ExpansionTile(
+                        title: const Text(
+                          '记录维护',
+                          style: TextStyle(fontSize: 13),
+                        ),
+                        tilePadding: EdgeInsets.zero,
+                        childrenPadding: EdgeInsets.zero,
+                        shape: const Border(),
+                        collapsedShape: const Border(),
+                        children: [
+                          UnavailableRecordsBar(
+                            store: store,
+                            library: 'history',
                           ),
-                        );
-                        if (ok == true) {
-                          await store.command({
-                            'op': 'clear',
-                            'library': 'history',
-                          });
-                        }
-                      }, danger: true),
+                          AvailabilityCheckControl(store: store),
+                          _link(context, '清空未置顶记录…', () async {
+                            final ok = await showDialog<bool>(
+                              context: context,
+                              builder: (c) => AlertDialog(
+                                title: const Text(
+                                  '清空未置顶记录？',
+                                  style: TextStyle(fontSize: 16),
+                                ),
+                                content: const Text(
+                                  '移除历史记录与副本，置顶记录、记事本和中转站会保留。',
+                                  style: TextStyle(fontSize: 12),
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(c, false),
+                                    child: const Text('取消'),
+                                  ),
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(c, true),
+                                    child: const Text('清空'),
+                                  ),
+                                ],
+                              ),
+                            );
+                            if (ok == true) {
+                              await store.command({
+                                'op': 'clear',
+                                'library': 'history',
+                              });
+                            }
+                          }, danger: true),
+                        ],
+                      ),
                     ]),
                     _section(context, '悬浮中转', [
                       _toggle(
@@ -600,7 +657,7 @@ class SettingsPanel extends StatelessWidget {
                         store.settings['transferHistory'] == true,
                         (v) => store.setting('transferHistory', v),
                       ),
-                      _hint(context, '默认关闭。拖入的图片、视频和文件始终保存独立中转副本；开启后也记入历史记录。'),
+                      _hint(context, '默认仅留在中转站，开启后同时收录。拖动文件到屏幕右上角可唤出收纳入口。'),
                       Row(
                         children: [
                           const Text('关闭后清空'),
@@ -736,17 +793,19 @@ class SettingsPanel extends StatelessWidget {
             style: TextStyle(
               fontFamily: ReplicaMetrics.fontFamily,
               fontFamilyFallback: ReplicaMetrics.fontFallback,
-              fontSize: 12,
-              color: secondary(c),
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: ReplicaMetrics.primary(c),
             ),
           ),
         ),
         Container(
           width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
-            color: isDark(c) ? const Color(0xff30333a) : Colors.white,
-            borderRadius: BorderRadius.circular(8),
+            color: (isDark(c) ? const Color(0xff30333a) : Colors.white)
+                .withValues(alpha: .70),
+            borderRadius: BorderRadius.circular(10),
             border: Border.all(
               color: ReplicaMetrics.border(c).withValues(alpha: .06),
               width: .5,

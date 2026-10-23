@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:clipboard_win/src/app.dart';
 import 'package:clipboard_win/src/store.dart';
+import 'package:clipboard_win/src/model.dart';
 
 class _UiStore extends ClipboardStore {
   _UiStore({required super.directory}) : super(usePlatform: false);
@@ -14,6 +15,17 @@ class _UiStore extends ClipboardStore {
   @override
   Future<bool> setting(String key, dynamic value) =>
       pendingSetting = super.setting(key, value);
+}
+
+class _QuickCopyStore extends ClipboardStore {
+  _QuickCopyStore({required super.directory})
+    : super(mode: 'popover', usePlatform: false);
+  String? copied;
+  @override
+  Future<bool> copy(ClipEntry e) async {
+    copied = e.id;
+    return true;
+  }
 }
 
 void main() {
@@ -91,7 +103,7 @@ void main() {
       expect(find.byType(HistoryCard), findsNWidgets(2));
       final firstCard = tester.getRect(find.byType(HistoryCard).first);
       expect(firstCard.left, 16);
-      expect(firstCard.top, 104);
+      expect(firstCard.top, 110);
       expect(firstCard.width, 408);
       expect(tester.getRect(find.byType(MacWindowControls)).width, 78);
       expect(tester.getRect(find.text('剪贴板')).left, 78);
@@ -155,12 +167,14 @@ void main() {
     await tester.pumpAndSettle();
     await tester.runAsync(() => screenshot('main-dark'));
     expect(tester.takeException(), isNull);
-    await tester.tap(find.byTooltip('设置'));
+    await tester.tap(find.byTooltip('设置与关于'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('设置…'));
     await tester.pumpAndSettle();
     expect(find.text('开机启动'), findsOneWidget);
     expect(
       tester.getSize(find.byKey(const ValueKey('settings-panel'))),
-      ReplicaMetrics.panelSize,
+      const Size(400, 560),
     );
     expect(tester.takeException(), isNull);
     await tester.runAsync(() => screenshot('settings-dark'));
@@ -215,7 +229,7 @@ void main() {
     await tester.pumpWidget(SuperClipboardApp(store: remote));
     await tester.pumpAndSettle();
     expect(find.text('中转站还是空的'), findsOneWidget);
-    expect(find.text('关闭后 10 分钟清空'), findsOneWidget);
+    expect(find.textContaining('关闭后 10 分钟清空'), findsOneWidget);
     expect(tester.getSize(find.byType(MacWindowControls)).height, 44);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
@@ -277,7 +291,9 @@ void main() {
       await tester.enterText(find.byType(TextField), '有迹可循');
       await tester.pumpAndSettle();
       expect(find.byType(HistoryCard), findsOneWidget);
-      await tester.tap(find.byTooltip('设置'));
+      await tester.tap(find.byTooltip('设置与关于'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('设置…'));
       await tester.pumpAndSettle();
       Future<void> chooseStyle(String value) async {
         final selector = tester.widget<PopupMenuButton<dynamic>>(
@@ -298,7 +314,9 @@ void main() {
       expect(find.byType(WindowsWindowControls), findsNothing);
       await tester.tap(find.byTooltip('关闭'));
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('设置'));
+      await tester.tap(find.byTooltip('设置与关于'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('设置…'));
       await tester.pumpAndSettle();
       await chooseStyle('windows');
       expect(find.byType(WindowsWindowControls), findsOneWidget);
@@ -324,6 +342,44 @@ void main() {
       expect(find.byTooltip('关闭窗口'), findsOneWidget);
       expect(find.byTooltip('关闭中转站'), findsNothing);
       expect(find.byType(MacWindowControls), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      remote.dispose();
+    },
+  );
+  testWidgets(
+    'popover Ctrl+number follows current search and notebook results',
+    (tester) async {
+      final remote = _QuickCopyStore(directory: directory);
+      remote.history = store.history;
+      remote.notebook = [
+        store.history.first.copyWith(id: 'saved', library: 'notebook'),
+      ];
+      tester.view.physicalSize = const Size(390, 520);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(SuperClipboardApp(store: remote));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), '有迹可循');
+      await tester.pumpAndSettle();
+      final visible = tester.widget<HistoryCard>(find.byType(HistoryCard));
+      Future<void> number(LogicalKeyboardKey key) async {
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+        await tester.sendKeyEvent(key);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+        await tester.pump();
+      }
+
+      await number(LogicalKeyboardKey.digit1);
+      expect(remote.copied, visible.entry.id);
+      await tester.tap(find.text('记事本').first);
+      await tester.pumpAndSettle();
+      await number(LogicalKeyboardKey.digit1);
+      expect(remote.copied, 'saved');
+      remote.copied = null;
+      await number(LogicalKeyboardKey.digit9);
+      expect(remote.copied, isNull);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
       remote.dispose();

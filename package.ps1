@@ -5,7 +5,7 @@ $packageBuild = Join-Path $packageProject 'build/windows/x64/runner/Release'
 $packageDirectory = Join-Path $packageProject ('dist/'+$PackageName)
 if (-not $SkipBuild) {
   . (Join-Path $packageProject 'scripts/release-common.ps1')
-  Invoke-FlutterRelease (Get-FlutterRunner) @('build','windows','--release')
+  Invoke-FlutterRelease (Get-FlutterRunner) @('build','windows','--release','--no-tree-shake-icons')
 }
 if (-not (Test-Path -LiteralPath (Join-Path $packageBuild 'clipboard_win.exe'))) {throw 'Build output missing'}
 New-Item -ItemType Directory -Force -Path $packageDirectory | Out-Null

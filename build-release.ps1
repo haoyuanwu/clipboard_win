@@ -25,7 +25,16 @@ try {
     Invoke-FlutterRelease $runner @('analyze','lib','test')
     Invoke-FlutterRelease $runner @('test')
   }
-  if (-not $SkipBuild) { Invoke-FlutterRelease $runner @('build','windows','--release',"--dart-define=APP_VERSION=$Version") }
+  if (-not $SkipBuild) { Invoke-FlutterRelease $runner @('build','windows','--release','--no-tree-shake-icons',"--dart-define=APP_VERSION=$Version") }
+  # Release icon subsetting can omit Cupertino glyphs referenced through shared controls.
+  # Ship full fonts on desktop, and verify the packaged font matches its source.
+  $config = Get-Content -LiteralPath (Join-Path $PSScriptRoot '.dart_tool/package_config.json') -Raw | ConvertFrom-Json
+  $iconsPackage = $config.packages | Where-Object name -eq 'cupertino_icons'
+  $packageUri = [Uri]::new([Uri]::new((Join-Path $PSScriptRoot '.dart_tool/package_config.json')), [string]$iconsPackage.rootUri)
+  $sourceFont = Join-Path $packageUri.LocalPath 'assets/CupertinoIcons.ttf'
+  $builtFont = Join-Path $PSScriptRoot 'build/windows/x64/runner/Release/data/flutter_assets/packages/cupertino_icons/assets/CupertinoIcons.ttf'
+  if ((Get-FileHash -LiteralPath $sourceFont).Hash -ne (Get-FileHash -LiteralPath $builtFont).Hash) { throw '发布字体不完整，请使用当前脚本重新构建，勿复用旧的裁剪图标构建。' }
+  if (-not $SkipChecks) { & (Join-Path $PSScriptRoot 'scripts/test-native.ps1') }
   $packageName = "SuperClipboard-Windows-x64-v$Version"
   & (Join-Path $PSScriptRoot 'package.ps1') -SkipBuild -PackageName $packageName
   if (-not $?) { throw '免安装包生成失败。' }

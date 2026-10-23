@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.14)
+project(superclipboard_native_tests LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+add_executable(native_transfer_test native_transfer_test.cpp ../../windows/runner/clipboard_native.cpp)
+target_include_directories(native_transfer_test PRIVATE ../../windows/runner ../../windows/flutter/ephemeral ../../windows/flutter/ephemeral/cpp_client_wrapper/include)
+target_compile_definitions(native_transfer_test PRIVATE UNICODE _UNICODE NOMINMAX)
+target_compile_options(native_transfer_test PRIVATE /utf-8 /EHsc)
+target_link_libraries(native_transfer_test PRIVATE shell32 ole32 shlwapi gdiplus advapi32 user32 gdi32 uuid)

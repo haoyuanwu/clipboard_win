@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/cupertino.dart';
 
 enum EntryKind {
@@ -151,4 +153,45 @@ String timestamp(DateTime time, [DateTime? now]) {
   }
   if (age.inHours < 48) return '昨天 $clock';
   return '${time.year}-${two(time.month)}-${two(time.day)} $clock';
+}
+
+/// Rechecked before copy, drag and cleanup; cached only for presentation.
+class ContentAvailability {
+  const ContentAvailability({
+    this.total = 0,
+    this.validPaths = const [],
+    this.missing = 0,
+  });
+  final int total, missing;
+  final List<String> validPaths;
+  bool get isMissing => total > 0 && total == missing;
+  bool get isPartial => missing > 0 && !isMissing;
+  static Future<ContentAvailability> check(ClipEntry e) async {
+    final paths = e.paths.isNotEmpty
+        ? e.paths
+        : e.kind == EntryKind.image
+        ? [e.imagePath]
+        : <String>[];
+    final valid = <String>[];
+    for (final path in paths) {
+      try {
+        final type = await FileSystemEntity.type(path);
+        if (type == FileSystemEntityType.directory) {
+          await Directory(path).list().take(1).drain<void>();
+          valid.add(path);
+        } else if (type == FileSystemEntityType.file) {
+          final file = await File(path).open();
+          await file.close();
+          valid.add(path);
+        }
+      } on FileSystemException {
+        /* Missing or inaccessible. */
+      }
+    }
+    return ContentAvailability(
+      total: paths.length,
+      validPaths: valid,
+      missing: paths.length - valid.length,
+    );
+  }
 }

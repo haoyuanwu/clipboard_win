@@ -315,4 +315,168 @@ void main() {
       legacy.dispose();
     },
   );
+  test('partial groups copy and drag only existing members without changing drag counts', () async {
+    final a = File('${sandbox.path}/a.txt')..writeAsStringSync('a');
+    final b = File('${sandbox.path}/b.txt')..writeAsStringSync('b');
+    await ingest({
+      'paths': [a.path, b.path],
+    });
+    final entry = store.history.single;
+    await b.delete();
+    await store.refreshAvailability();
+    expect(store.status(entry).isPartial, isTrue);
+    expect((await store.dragPayload(entry))!['paths'], [a.path]);
+    expect(entry.count, 1);
+    expect(await store.copy(entry), isTrue);
+    expect(entry.count, 2);
+    expect(
+      await store.command({'op': 'copy', 'id': entry.id, 'path': b.path}),
+      isFalse,
+    );
+    expect(
+      await store.command({
+        'op': 'copy',
+        'id': entry.id,
+        'path': '${sandbox.path}/outside.txt',
+      }),
+      isFalse,
+    );
+    await a.delete();
+    expect(await store.dragPayload(entry), isNull);
+    expect(await store.copy(entry), isFalse);
+    expect(entry.count, 2);
+  });
+  test('invalid cleanup protects pins, partial groups, notebook and restored files', () async {
+    final lost = File('${sandbox.path}/lost.txt')..writeAsStringSync('lost');
+    final pinned = File('${sandbox.path}/pinned.txt')..writeAsStringSync('pin');
+    final alive = File('${sandbox.path}/alive.txt')..writeAsStringSync('alive');
+    await ingest({
+      'paths': [lost.path],
+    });
+    final first = store.history.single;
+    await store.command({
+      'op': 'archive',
+      'id': first.id,
+      'target': 'notebook',
+    });
+    await ingest({
+      'paths': [pinned.path],
+    });
+    final pin = store.history.first;
+    await store.command({'op': 'pin', 'id': pin.id});
+    await ingest({
+      'paths': [alive.path, lost.path],
+    });
+    await lost.delete();
+    await pinned.delete();
+    await store.refreshAvailability();
+    expect(store.status(first).isMissing, isTrue);
+    // The confirmation captured this ID; restoring before confirmation must save it.
+    await lost.writeAsString('restored');
+    expect(
+      await store.command({
+        'op': 'cleanInvalid',
+        'ids': [first.id],
+      }),
+      isTrue,
+    );
+    expect(store.history, contains(first));
+    await lost.delete();
+    expect(await store.command({'op': 'cleanInvalid'}), isTrue);
+    expect(store.history.map((e) => e.id), contains(pin.id));
+    expect(store.history, hasLength(2));
+    expect(
+      await File(store.notebook.single.paths.single).readAsString(),
+      'lost',
+    );
+    final reopened = ClipboardStore(directory: store.root, usePlatform: false);
+    await reopened.initialize();
+    expect(reopened.history, hasLength(2));
+    reopened.dispose();
+  });
+  test('invalid cleanup rolls back its list if persistence fails', () async {
+    final original = File('${sandbox.path}/gone.txt')
+      ..writeAsStringSync('original');
+    await ingest({
+      'paths': [original.path],
+    });
+    final entry = store.history.single;
+    await original.delete();
+    final blocker = Directory('${store.root.path}/state.json.tmp');
+    await blocker.create();
+    expect(await store.command({'op': 'cleanInvalid'}), isFalse);
+    expect(store.history.single.id, entry.id);
+    await blocker.delete();
+    expect(await store.command({'op': 'cleanInvalid'}), isTrue);
+    expect(store.history, isEmpty);
+  });
+  test(
+    'shortcut defaults and disabled custom combination survive reopening',
+    () async {
+      expect((store.settings['popoverShortcut'] as Map)['key'], 67);
+      expect((store.settings['transferShortcut'] as Map)['key'], 86);
+      final custom = {
+        'enabled': false,
+        'modifiers': 6,
+        'key': 75,
+        'label': 'Ctrl + Shift + K',
+      };
+      await store.setting('transferShortcut', custom);
+      final reopened = ClipboardStore(
+        directory: store.root,
+        usePlatform: false,
+      );
+      await reopened.initialize();
+      expect(reopened.settings['transferShortcut'], custom);
+      reopened.dispose();
+    },
+  );
+  test(
+    'virtual file staging is released only after independent archive succeeds',
+    () async {
+      final staging = Directory('${store.root.path}/Cache/drop-123')
+        ..createSync();
+      final file = File('${staging.path}/attachment.txt')
+        ..writeAsStringSync('attachment');
+      expect(
+        await store.command({
+          'op': 'drop',
+          'data': {
+            'paths': [file.path],
+            'temporaryDirectory': staging.path,
+          },
+        }),
+        isTrue,
+      );
+      expect(await staging.exists(), isFalse);
+      expect(
+        await File(store.transfer.single.paths.single).readAsString(),
+        'attachment',
+      );
+      final keep = Directory('${store.root.path}/Cache/drop-456')..createSync();
+      final next = File('${keep.path}/mail.txt')..writeAsStringSync('mail');
+      await store.setting('transferHistory', true);
+      expect(
+        await store.command({
+          'op': 'drop',
+          'data': {
+            'paths': [next.path],
+            'temporaryDirectory': keep.path,
+          },
+        }),
+        isTrue,
+      );
+      expect(await keep.exists(), isTrue);
+      expect(await store.copy(store.history.single), isTrue);
+      final before = store.transfer.length;
+      expect(
+        await store.command({
+          'op': 'drop',
+          'data': {'error': '读取失败'},
+        }),
+        isFalse,
+      );
+      expect(store.transfer.length, before);
+    },
+  );
 }

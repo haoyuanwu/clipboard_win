@@ -4,7 +4,7 @@ part of 'app.dart';
 abstract final class ReplicaMetrics {
   static const appVersion = String.fromEnvironment(
     'APP_VERSION',
-    defaultValue: '1.2.1',
+    defaultValue: '1.3.2',
   );
   static const mainSize = Size(440, 640);
   static const popoverSize = Size(390, 520);
@@ -12,7 +12,7 @@ abstract final class ReplicaMetrics {
   static const detailSize = Size(420, 420);
   static const panelSize = Size(390, 440);
   static const inset = 16.0, cardGap = 12.0, cardRadius = 16.0;
-  static const titleHeight = 46.0, filterHeight = 42.0;
+  static const titleHeight = 52.0, filterHeight = 42.0;
   static const fontFamily = 'Segoe UI';
   static const fontFallback = ['Microsoft YaHei UI', 'Microsoft YaHei'];
   static const lightCategory = [
@@ -198,6 +198,23 @@ class ToolButton extends StatelessWidget {
 }
 
 /// Shared translucent frost. Backgrounds blur; text and controls stay sharp.
+class GlassActivityScope extends InheritedWidget {
+  const GlassActivityScope({
+    super.key,
+    required this.active,
+    required super.child,
+  });
+  final bool active;
+  static bool activeOf(BuildContext context) =>
+      context
+          .dependOnInheritedWidgetOfExactType<GlassActivityScope>()
+          ?.active ??
+      true;
+  @override
+  bool updateShouldNotify(GlassActivityScope oldWidget) =>
+      active != oldWidget.active;
+}
+
 class MacGlassSurface extends StatelessWidget {
   const MacGlassSurface({
     super.key,
@@ -213,6 +230,7 @@ class MacGlassSurface extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dark = isDark(context), opaque = MediaQuery.highContrastOf(context);
+    final active = GlassActivityScope.activeOf(context);
     return ClipRRect(
       borderRadius: BorderRadius.circular(radius),
       child: Stack(
@@ -230,17 +248,36 @@ class MacGlassSurface extends StatelessWidget {
                           end: Alignment.bottomRight,
                           colors: dark
                               ? [
-                                  const Color(0xff353c48)
-                                      .withValues(alpha: strip ? .42 : .76),
-                                  const Color(0xff1d222c)
-                                      .withValues(alpha: strip ? .36 : .70),
+                                  const Color(0xff353c48).withValues(
+                                    alpha: strip
+                                        ? .42
+                                        : active
+                                        ? .76
+                                        : .58,
+                                  ),
+                                  const Color(0xff1d222c).withValues(
+                                    alpha: strip
+                                        ? .36
+                                        : active
+                                        ? .70
+                                        : .52,
+                                  ),
                                 ]
                               : [
                                   Colors.white.withValues(
-                                    alpha: strip ? .46 : .72,
+                                    alpha: strip
+                                        ? .46
+                                        : active
+                                        ? .72
+                                        : .54,
                                   ),
-                                  const Color(0xffedf1f7)
-                                      .withValues(alpha: strip ? .38 : .64),
+                                  const Color(0xffedf1f7).withValues(
+                                    alpha: strip
+                                        ? .38
+                                        : active
+                                        ? .64
+                                        : .46,
+                                  ),
                                 ],
                         ),
                 ),

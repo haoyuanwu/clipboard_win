@@ -34,10 +34,51 @@ class ClipboardStore extends ChangeNotifier {
     'startup': true,
     'transferMinutes': 10,
     'transferHistory': false,
+    'popoverShortcut': {
+      'enabled': true,
+      'modifiers': 3,
+      'key': 67,
+      'label': 'Ctrl + Alt + C',
+    },
+    'transferShortcut': {
+      'enabled': true,
+      'modifiers': 3,
+      'key': 86,
+      'label': 'Ctrl + Alt + V',
+    },
   };
   String notebookPath = '', error = '';
   bool busy = false, dropTargeted = false;
-  bool windowMaximized = false;
+  bool windowMaximized = false, windowFocused = true;
+  int _availabilityRevision = 0;
+  bool _disposed = false;
+  final availability = <String, ContentAvailability>{};
+  ContentAvailability status(ClipEntry e) =>
+      availability[e.id] ?? const ContentAvailability();
+  Future<void> refreshAvailability() async {
+    final revision = ++_availabilityRevision;
+    final all = [...history, ...notebook, ...transfer];
+    final checked = await Future.wait(all.map(ContentAvailability.check));
+    if (_disposed || revision != _availabilityRevision) return;
+    availability.clear();
+    for (var i = 0; i < all.length; i++) {
+      availability[all[i].id] = checked[i];
+    }
+    notifyListeners();
+  }
+
+  Future<Map<String, dynamic>?> dragPayload(ClipEntry e, {String? path}) async {
+    final state = await ContentAvailability.check(e);
+    if (state.isMissing || (path != null && !state.validPaths.contains(path))) {
+      return null;
+    }
+    final payload = e.toJson();
+    if (e.paths.isNotEmpty) {
+      payload['paths'] = path == null ? state.validPaths : [path];
+    }
+    return payload;
+  }
+
   bool get windowsStyle => settings['titleBarStyle'] != 'mac';
   void setWindowMaximized(bool value) {
     if (windowMaximized == value) return;
@@ -46,7 +87,7 @@ class ClipboardStore extends ChangeNotifier {
   }
 
   int sessionRevision = 0;
-  Timer? _cleanupTimer;
+  Timer? _cleanupTimer, _availabilityTimer;
   DateTime? _transferDeadline;
   Future<void> _tail = Future.value();
   int _serial = 0;
@@ -84,19 +125,28 @@ class ClipboardStore extends ChangeNotifier {
       .toList();
   Future<void> initialize() async {
     notebookPath = '${root.path}/Notebook';
+    _availabilityTimer = Timer.periodic(
+      const Duration(seconds: 15),
+      (_) => unawaited(refreshAvailability()),
+    );
     if (usePlatform) {
       WindowsBridge.channel.setMethodCallHandler((call) async {
         switch (call.method) {
+          case 'windowFocus':
+            windowFocused = call.arguments == true;
+            notifyListeners();
           case 'windowState':
             setWindowMaximized(call.arguments == true);
           case 'state':
             _readSnapshot(Map<String, dynamic>.from(call.arguments));
+            unawaited(refreshAvailability());
             notifyListeners();
           case 'action':
             return command(Map<String, dynamic>.from(call.arguments));
           case 'clipboardChanged':
             unawaited(command({'op': 'capture'}));
           case 'shown':
+            unawaited(refreshAvailability());
             sessionRevision++;
             dropTargeted = false;
             notifyListeners();
@@ -105,7 +155,11 @@ class ClipboardStore extends ChangeNotifier {
               command({'op': 'transferVisibility', 'visible': call.arguments}),
             );
           case 'drop':
-            unawaited(command({'op': 'drop', 'data': call.arguments}));
+            unawaited(() async {
+              await command({'op': 'drop', 'data': call.arguments});
+              dropTargeted = false;
+              await WindowsBridge.call('show', 'transfer');
+            }());
           case 'dropHover':
             dropTargeted = call.arguments == true;
             notifyListeners();
@@ -116,6 +170,7 @@ class ClipboardStore extends ChangeNotifier {
     if (mode != 'main') {
       final state = await WindowsBridge.connect();
       if (state != null) _readSnapshot(Map<String, dynamic>.from(state));
+      await refreshAvailability();
       return;
     }
     await root.create(recursive: true);
@@ -175,6 +230,11 @@ class ClipboardStore extends ChangeNotifier {
       } catch (e) {
         error = '开机启动设置失败：$e';
       }
+      final shortcutsReady = await WindowsBridge.call<bool>('setShortcuts', {
+        'popover': settings['popoverShortcut'],
+        'transfer': settings['transferShortcut'],
+      });
+      if (shortcutsReady != true) error = '部分全局快捷键已被占用，请在设置中重新录制。';
       await WindowsBridge.call('broadcast', snapshot);
       await WindowsBridge.call('listen', {
         'cache': '${root.path}/Cache',
@@ -182,6 +242,7 @@ class ClipboardStore extends ChangeNotifier {
       });
       await _persist();
     }
+    await refreshAvailability();
   }
 
   Future<bool> command(Map<String, dynamic> action) async {
@@ -192,7 +253,8 @@ class ClipboardStore extends ChangeNotifier {
     _tail = _tail.then((_) async {
       try {
         final ok = await _perform(action);
-        await _persist();
+        if (action['op'] != 'cleanInvalid') await _persist();
+        await refreshAvailability();
         result.complete(ok);
       } catch (e) {
         error = '操作失败：${e is FileSystemException ? e.message : e}';
@@ -222,28 +284,79 @@ class ClipboardStore extends ChangeNotifier {
         final data = await WindowsBridge.call<Map>('readClipboard');
         if (data != null) await _capture(Map<String, dynamic>.from(data));
       case 'drop':
-        final e = await _makeEntry(Map<String, dynamic>.from(a['data']));
-        if (e == null || transfer.any((x) => x.fingerprint == e.fingerprint)) {
-          break;
+        final data = Map<String, dynamic>.from(a['data']);
+        final staged = data['temporaryDirectory'] as String? ?? '';
+        var keepStaging = false;
+        try {
+          final e = await _makeEntry(data);
+          if (e == null ||
+              transfer.any((x) => x.fingerprint == e.fingerprint)) {
+            break;
+          }
+          await _archive(e, 'transfer');
+          if (settings['transferHistory'] == true) {
+            await _record(e);
+            keepStaging = true;
+          }
+        } finally {
+          // Native virtual files are staged under this application's cache only.
+          final normalized = Directory(staged).absolute.path
+              .replaceAll('\\', '/')
+              .toLowerCase();
+          final cache = Directory('${root.path}/Cache').absolute.path
+              .replaceAll('\\', '/')
+              .toLowerCase();
+          if (!keepStaging &&
+              staged.isNotEmpty &&
+              normalized.startsWith('$cache/drop-') &&
+              !normalized.substring(cache.length + 1).contains('/')) {
+            final directory = Directory(staged);
+            if (await directory.exists()) {
+              await directory.delete(recursive: true);
+            }
+          }
         }
-        await _archive(e, 'transfer');
-        if (settings['transferHistory'] == true) await _record(e);
       case 'copy':
         // Clipboard writes are handled by the owner engine to avoid recording ourselves.
         if (entry == null) return false;
-        for (final path in entry.paths) {
-          if (!await FileSystemEntity.isFile(path) &&
-              !await FileSystemEntity.isDirectory(path)) {
-            throw const FileSystemException('原文件已移动或删除，请检查文件后重试。');
-          }
-        }
+        final payload = await dragPayload(entry, path: a['path'] as String?);
+        if (payload == null) throw const FileSystemException('内容已移动、删除或无法访问。');
         final success =
             !usePlatform ||
-            await WindowsBridge.call<bool>('writeClipboard', entry.toJson()) ==
-                true;
+            await WindowsBridge.call<bool>('writeClipboard', payload) == true;
         if (!success) throw const FileSystemException('剪贴板正被其他应用占用，请重试。');
         entry.count++;
         entry.lastCopiedAt = DateTime.now();
+      case 'refreshAvailability':
+        await refreshAvailability();
+      case 'cleanInvalid':
+        if (lib == 'notebook') return false;
+        final ids = (a['ids'] as List?)?.cast<String>().toSet();
+        final old = [...items];
+        final removed = <ClipEntry>[];
+        for (final e in old) {
+          if (!e.pinned &&
+              (ids == null || ids.contains(e.id)) &&
+              (await ContentAvailability.check(e)).isMissing) {
+            removed.add(e);
+          }
+        }
+        items.removeWhere(removed.contains);
+        try {
+          await _persist();
+        } catch (_) {
+          items
+            ..clear()
+            ..addAll(old);
+          rethrow;
+        }
+        for (final e in removed) {
+          try {
+            await _deleteAssets(e);
+          } on FileSystemException {
+            /* Index is committed; orphan can be removed later. */
+          }
+        }
       case 'pin':
         if (entry != null) entry.pinned = !entry.pinned;
       case 'delete':
@@ -274,6 +387,13 @@ class ClipboardStore extends ChangeNotifier {
             'enabled': value,
             'initialize': false,
           });
+        }
+        if (key.endsWith('Shortcut') && usePlatform) {
+          final ok = await WindowsBridge.call<bool>('setShortcut', {
+            'mode': key == 'popoverShortcut' ? 'popover' : 'transfer',
+            'shortcut': value,
+          });
+          if (ok != true) throw const FileSystemException('快捷键已被占用，请选择其他组合。');
         }
         settings[key] = value;
         if (key == 'limit') await _trim();
@@ -311,6 +431,7 @@ class ClipboardStore extends ChangeNotifier {
   }
 
   Future<ClipEntry?> _makeEntry(Map<String, dynamic> d) async {
+    if (d['error'] is String) throw FileSystemException(d['error']);
     final dragIdentity = d['fingerprint'];
     if (dragIdentity is String && dragIdentity.isNotEmpty) {
       final existing = [
@@ -422,9 +543,12 @@ class ClipboardStore extends ChangeNotifier {
     );
     await dir.create(recursive: true);
     try {
+      final status = await ContentAvailability.check(entry);
+      if (status.isMissing) throw const FileSystemException('原内容暂时不可用，无法保存副本。');
+      final sourcePaths = entry.paths.isEmpty ? <String>[] : status.validPaths;
       final savedPaths = <String>[];
-      for (var i = 0; i < entry.paths.length; i++) {
-        final path = entry.paths[i];
+      for (var i = 0; i < sourcePaths.length; i++) {
+        final path = sourcePaths[i];
         final name = path.replaceAll('\\', '/').split('/').last;
         final destination = '${dir.path}/files/$i/$name';
         await _copyEntity(path, destination);
@@ -585,6 +709,8 @@ class ClipboardStore extends ChangeNotifier {
       command({'op': 'settings', 'key': key, 'value': value});
   @override
   void dispose() {
+    _disposed = true;
+    _availabilityTimer?.cancel();
     _cleanupTimer?.cancel();
     super.dispose();
   }

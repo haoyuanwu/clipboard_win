@@ -8,8 +8,10 @@ class HistoryCard extends StatefulWidget {
     required this.onContext,
     this.copied = false,
     this.translucent = false,
+    this.availability = const ContentAvailability(),
   });
   final ClipEntry entry;
+  final ContentAvailability availability;
   final VoidCallback onTap;
   final ValueChanged<Offset> onContext;
   final bool copied, translucent;
@@ -119,8 +121,29 @@ class _HistoryCardState extends State<HistoryCard> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          EntryContent(entry: e),
+                          if (widget.availability.isMissing)
+                            MissingEntryPlaceholder(entry: e)
+                          else
+                            EntryContent(entry: e),
+                          if (widget.availability.isPartial)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 10),
+                              child: Text(
+                                '部分文件不可用（${widget.availability.missing}/${widget.availability.total}），可使用剩余文件',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: secondary(context),
+                                ),
+                              ),
+                            ),
                           const SizedBox(height: 12),
+                          Divider(
+                            height: 1,
+                            thickness: .5,
+                            color: ReplicaMetrics.cardSecondary(context)
+                                .withValues(alpha: .12),
+                          ),
+                          const SizedBox(height: 9),
                           DefaultTextStyle(
                             style: TextStyle(
                               fontFamily: ReplicaMetrics.fontFamily,
@@ -325,40 +348,65 @@ class EntryContent extends StatelessWidget {
     }
     if (e.kind == EntryKind.file) {
       return Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(CupertinoIcons.doc, size: 18),
-          const SizedBox(width: 8),
+          Container(
+            width: 44,
+            height: 48,
+            decoration: BoxDecoration(
+              color: control(context),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+              e.paths.length > 1 ? CupertinoIcons.folder : CupertinoIcons.doc,
+              size: 21,
+            ),
+          ),
+          const SizedBox(width: 12),
           Expanded(
-            child: Text(
-              e.title,
-              maxLines: detail ? null : 3,
-              style: TextStyle(
-                fontFamily: ReplicaMetrics.fontFamily,
-                fontFamilyFallback: ReplicaMetrics.fontFallback,
-                fontSize: 14,
-                height: 1.428571,
-                color: ReplicaMetrics.cardPrimary(context),
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  e.title,
+                  maxLines: detail ? null : 2,
+                  overflow: detail
+                      ? TextOverflow.visible
+                      : TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: ReplicaMetrics.cardPrimary(context),
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  e.paths.length > 1 ? '${e.paths.length} 个文件' : '文件',
+                  style: TextStyle(fontSize: 11, color: secondary(context)),
+                ),
+              ],
             ),
           ),
         ],
       );
     }
+
     final path = e.kind == EntryKind.image ? e.imagePath : e.previewPath;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         ClipRRect(
           borderRadius: BorderRadius.circular(12),
-          child: path.isNotEmpty
-              ? Image.file(
-                  File(path),
-                  width: double.infinity,
-                  fit: BoxFit.contain,
-                  errorBuilder: (_, _, _) => _placeholder(context),
-                )
-              : _placeholder(context),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: detail ? 280 : 176),
+            child: path.isNotEmpty
+                ? Image.file(
+                    File(path),
+                    width: double.infinity,
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, _, _) => _placeholder(context),
+                  )
+                : _placeholder(context),
+          ),
         ),
         if (e.kind == EntryKind.image) ...[
           const SizedBox(height: 8),

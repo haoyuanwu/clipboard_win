@@ -71,6 +71,64 @@ std::vector<uint8_t> DropBytes(const flutter::EncodableList& paths) {
   auto header = reinterpret_cast<DROPFILES*>(bytes.data()); header->pFiles = sizeof(DROPFILES); header->fWide = TRUE;
   memcpy(bytes.data() + sizeof(DROPFILES), joined.data(), joined.size() * sizeof(wchar_t)); return bytes;
 }
+// Materialize virtual file streams before acknowledging the OLE drop. No partial group is returned.
+bool ReadVirtualFiles(IDataObject* object, const std::vector<uint8_t>& descriptor, Map& data) {
+  if (cache_path.empty() || descriptor.size() < sizeof(UINT)) return false;
+  const auto* group = reinterpret_cast<const FILEGROUPDESCRIPTORW*>(descriptor.data());
+  if (!group->cItems || group->cItems > 10000 || group->cItems > (descriptor.size() - sizeof(UINT)) / sizeof(FILEDESCRIPTORW)) return false;
+  auto folder = std::filesystem::path(NewPath(L"drop-")).replace_extension();
+  std::error_code error;
+  std::filesystem::create_directories(folder, error);
+  if (error) return false;
+  flutter::EncodableList paths;
+  bool ok = true;
+  for (UINT index = 0; index < group->cItems && ok; ++index) {
+    const auto& file = group->fgd[index];
+    const auto end = std::find(std::begin(file.cFileName), std::end(file.cFileName), L'\0');
+    const std::wstring name(file.cFileName, end);
+    if (name.empty() || name == L"." || name == L".." || name.find_first_of(L"<>:\"/\\|?*") != std::wstring::npos) { ok = false; break; }
+    const auto container = folder / std::to_wstring(index);
+    const auto target = container / name;
+    std::filesystem::create_directories(container, error);
+    if (error) { ok = false; break; }
+    if ((file.dwFlags & FD_ATTRIBUTES) && (file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+      std::filesystem::create_directory(target, error);
+      if (error) { ok = false; break; }
+    } else {
+      FORMATETC format{static_cast<CLIPFORMAT>(RegisterClipboardFormat(CFSTR_FILECONTENTS)), nullptr,
+        DVASPECT_CONTENT, static_cast<LONG>(index), TYMED_ISTREAM | TYMED_HGLOBAL};
+      STGMEDIUM medium{};
+      if (FAILED(object->GetData(&format, &medium))) { ok = false; break; }
+      std::ofstream output(target, std::ios::binary);
+      uint64_t total = 0;
+      if (medium.tymed == TYMED_ISTREAM && medium.pstm) {
+        char buffer[65536]; ULONG count = 0; HRESULT status;
+        do {
+          status = medium.pstm->Read(buffer, sizeof(buffer), &count);
+          if (FAILED(status)) { ok = false; break; }
+          output.write(buffer, count); total += count;
+        } while (count && status == S_OK);
+      } else if (medium.tymed == TYMED_HGLOBAL && medium.hGlobal) {
+        auto size = GlobalSize(medium.hGlobal);
+        if (file.dwFlags & FD_FILESIZE) {
+          const uint64_t expected = (static_cast<uint64_t>(file.nFileSizeHigh) << 32) | file.nFileSizeLow;
+          if (expected > size) ok = false; else size = static_cast<SIZE_T>(expected);
+        }
+        auto content = GlobalLock(medium.hGlobal);
+        if (!content && size) ok = false;
+        else if (content) { output.write(static_cast<const char*>(content), static_cast<std::streamsize>(size)); total = size; GlobalUnlock(medium.hGlobal); }
+      } else ok = false;
+      output.close();
+      if (!output || ((file.dwFlags & FD_FILESIZE) && total != ((static_cast<uint64_t>(file.nFileSizeHigh) << 32) | file.nFileSizeLow))) ok = false;
+      ReleaseStgMedium(&medium);
+    }
+    paths.emplace_back(Utf8(target.wstring()));
+  }
+  if (!ok) { std::filesystem::remove_all(folder, error); return false; }
+  data[Value("paths")] = Value(paths);
+  data[Value("temporaryDirectory")] = Value(Utf8(folder.wstring()));
+  return true;
+}
 void Source(Map& data) {
   HWND owner = GetClipboardOwner();
   if (!owner) owner = GetForegroundWindow();
@@ -134,8 +192,11 @@ Value Read(HWND window, IDataObject* object) {
     auto bytes = Bytes(medium.hGlobal); ReleaseStgMedium(&medium); return bytes;
   };
   auto files = get(CF_HDROP);
+  auto descriptors = object && files.empty() ? get(static_cast<CLIPFORMAT>(RegisterClipboardFormat(CFSTR_FILEDESCRIPTORW))) : std::vector<uint8_t>{};
   if (!files.empty()) {
     HGLOBAL memory = Alloc(files.data(), files.size()); data[Value("paths")] = Value(FileList(memory)); GlobalFree(memory);
+  } else if (!descriptors.empty()) {
+    if (!ReadVirtualFiles(object, descriptors, data)) data[Value("error")] = Value("文件数据未能完整读取，未导入任何文件。");
   } else {
     auto png = get(static_cast<CLIPFORMAT>(RegisterClipboardFormat(L"PNG")));
     std::wstring image;
@@ -278,6 +339,7 @@ class DragData : public IDataObject, public IDropSource {
 };
 }
 void Drag(HWND window, const Map& entry) {
+  if (!(GetAsyncKeyState(VK_LBUTTON) & 0x8000)) return;
   const auto kind = String(entry, "kind");
   DragData* data = nullptr;
   if (kind == "text") {
@@ -290,13 +352,23 @@ void Drag(HWND window, const Map& entry) {
     else {
       auto it = entry.find(Value("paths")); if (it == entry.end()) return;
       paths = std::get<flutter::EncodableList>(it->second);
-      if (paths.size() > 1) {
-        // The files directory groups a multi-file entry into one draggable folder.
-        auto first = std::filesystem::path(Wide(std::get<std::string>(paths.front())));
-        paths = {Value(Utf8(first.parent_path().parent_path().wstring()))};
-      }
+      // Windows accepts a native multi-file selection; never infer a parent folder.
+
     }
     data = new DragData(CF_HDROP, DropBytes(paths));
+  }
+  if (kind == "text") {
+    for (auto name : {"html", "rtf"}) {
+      auto content = String(entry, name);
+      if (std::string(name) == "rtf") {
+        auto wide = Wide(content); content.clear();
+        for (auto c : wide) content += static_cast<char>(c & 0xff);
+      }
+      if (content.empty()) continue;
+      FORMATETC format{static_cast<CLIPFORMAT>(RegisterClipboardFormat(std::string(name) == "html" ? L"HTML Format" : L"Rich Text Format")), nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+      STGMEDIUM medium{}; medium.tymed = TYMED_HGLOBAL; medium.hGlobal = Alloc(content.c_str(), content.size() + 1);
+      if (medium.hGlobal) data->SetData(&format, &medium, TRUE);
+    }
   }
   auto fingerprint = String(entry, "fingerprint");
   FORMATETC identity_format{static_cast<CLIPFORMAT>(RegisterClipboardFormat(L"SuperClipboard.Entry")), nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};

@@ -17,6 +17,7 @@ part 'panels.dart';
 part 'cards.dart';
 part 'mac_controls.dart';
 part 'windows_controls.dart';
+part 'alignment_controls.dart';
 
 class SuperClipboardApp extends StatelessWidget {
   const SuperClipboardApp({super.key, required this.store});
@@ -41,9 +42,12 @@ class SuperClipboardApp extends StatelessWidget {
             ? child!
             : NativeGlassHost(
                 enabled: store.usePlatform,
-                child: MacGlassSurface(
-                  transfer: store.mode == 'transfer',
-                  child: child!,
+                child: GlassActivityScope(
+                  active: store.windowFocused,
+                  child: MacGlassSurface(
+                    transfer: store.mode == 'transfer',
+                    child: child!,
+                  ),
                 ),
               ),
       ),
@@ -229,6 +233,25 @@ class _ClipboardHomeState extends State<ClipboardHome> {
     final items = entries;
     return CallbackShortcuts(
       bindings: {
+        if (popover)
+          for (var i = 0; i < 9; i++)
+            SingleActivator(
+              [
+                LogicalKeyboardKey.digit1,
+                LogicalKeyboardKey.digit2,
+                LogicalKeyboardKey.digit3,
+                LogicalKeyboardKey.digit4,
+                LogicalKeyboardKey.digit5,
+                LogicalKeyboardKey.digit6,
+                LogicalKeyboardKey.digit7,
+                LogicalKeyboardKey.digit8,
+                LogicalKeyboardKey.digit9,
+              ][i],
+              control: true,
+            ): () {
+              final filtered = entries;
+              if (i < filtered.length) unawaited(_copy(filtered[i]));
+            },
         const SingleActivator(LogicalKeyboardKey.keyF, control: true): () {
           setState(() => expanded = true);
           searchFocus.requestFocus();
@@ -259,6 +282,8 @@ class _ClipboardHomeState extends State<ClipboardHome> {
                   else
                     _mainHeader(context),
                   if (store.busy) const LinearProgressIndicator(minHeight: 2),
+                  if (library != 'notebook')
+                    UnavailableRecordsBar(store: store, library: library),
                   if (store.error.isNotEmpty)
                     Material(
                       color: Theme.of(context).colorScheme.errorContainer,
@@ -308,25 +333,34 @@ class _ClipboardHomeState extends State<ClipboardHome> {
                                   const SizedBox(height: 12),
                               itemBuilder: (context, i) {
                                 final e = items[i];
-                                final card = HistoryCard(
-                                  entry: e,
-                                  copied: copiedId == e.id,
-                                  translucent: transfer,
-                                  onTap: () => popover || transfer
-                                      ? _copy(e)
-                                      : _detail(e),
-                                  onContext: (p) => _context(e, p),
-                                );
-                                if (!transfer) return card;
-                                return GestureDetector(
-                                  onPanStart: store.usePlatform
-                                      ? (_) => WindowsBridge.call(
-                                          'startDrag',
-                                          e.toJson(),
-                                        )
-                                      : null,
-                                  child: card,
-                                );
+                                final Widget card =
+                                    transfer && e.paths.length > 1
+                                    ? TransferFileGroupCard(
+                                        key: ValueKey(e.id),
+                                        store: store,
+                                        entry: e,
+                                        copied: copiedId == e.id,
+                                        onCopy: () => _copy(e),
+                                        onContext: (p) => _context(e, p),
+                                      )
+                                    : HistoryCard(
+                                        key: ValueKey(e.id),
+                                        entry: e,
+                                        availability: store.status(e),
+                                        copied: copiedId == e.id,
+                                        translucent: transfer,
+                                        onTap: () => popover || transfer
+                                            ? _copy(e)
+                                            : _detail(e),
+                                        onContext: (p) => _context(e, p),
+                                      );
+                                return transfer && e.paths.length > 1
+                                    ? card
+                                    : EntryDragSource(
+                                        store: store,
+                                        entry: e,
+                                        child: card,
+                                      );
                               },
                             ),
                           ),
@@ -353,7 +387,7 @@ class _ClipboardHomeState extends State<ClipboardHome> {
                             ),
                             const SizedBox(width: 4),
                             Text(
-                              '关闭后 ${store.settings['transferMinutes']} 分钟清空',
+                              '${(store.settings['transferShortcut'] as Map)['enabled'] == true ? '${(store.settings['transferShortcut'] as Map)['label']} · ' : ''}关闭后 ${store.settings['transferMinutes']} 分钟清空',
                               style: TextStyle(
                                 fontFamily: ReplicaMetrics.fontFamily,
                                 fontFamilyFallback: ReplicaMetrics.fontFallback,
@@ -406,6 +440,31 @@ class _ClipboardHomeState extends State<ClipboardHome> {
         : null,
     child: child,
   );
+  Widget _settingsMenu(BuildContext context) => PopupMenuButton<String>(
+    tooltip: '设置与关于',
+    padding: EdgeInsets.zero,
+    constraints: const BoxConstraints(minWidth: 160),
+    onSelected: (value) {
+      if (value == 'settings') {
+        _settings();
+      } else {
+        _about();
+      }
+    },
+    itemBuilder: (_) => [
+      const PopupMenuItem(value: 'settings', height: 30, child: Text('设置…')),
+      const PopupMenuItem(
+        value: 'about',
+        height: 30,
+        child: Text('关于 SuperClipboard'),
+      ),
+    ],
+    child: SizedBox(
+      width: 30,
+      height: 30,
+      child: Icon(CupertinoIcons.ellipsis, size: 18, color: accent(context)),
+    ),
+  );
   Widget _windowsToolbar(BuildContext context) => SizedBox(
     height: 44,
     child: Padding(
@@ -432,15 +491,7 @@ class _ClipboardHomeState extends State<ClipboardHome> {
             iconSize: 16,
           ),
           const SizedBox(width: 4),
-          ToolButton(
-            Icons.settings_outlined,
-            '设置',
-            _settings,
-            size: 30,
-            iconSize: 16,
-          ),
-          const SizedBox(width: 4),
-          ToolButton(Icons.info_outline, '关于', _about, size: 30, iconSize: 16),
+          _settingsMenu(context),
         ],
       ),
     ),
@@ -469,16 +520,27 @@ class _ClipboardHomeState extends State<ClipboardHome> {
                         if (expanded)
                           Expanded(child: _searchField(context, collapse: true))
                         else ...[
-                          Text(
-                            library == 'notebook' ? '记事本' : '剪贴板',
-                            maxLines: 1,
-                            style: const TextStyle(
-                              fontFamily: ReplicaMetrics.fontFamily,
-                              fontFamilyFallback: ReplicaMetrics.fontFallback,
-                              fontSize: 14,
-                              height: 1.2,
-                              fontWeight: FontWeight.w600,
-                            ),
+                          Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                library == 'notebook' ? '记事本' : '剪贴板',
+                                maxLines: 1,
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                '${library == 'notebook' ? '独立保存' : '最近收集'} · ${entries.length} 条',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: secondary(context),
+                                ),
+                              ),
+                            ],
                           ),
                           const Spacer(),
                           ToolButton(CupertinoIcons.search, '展开搜索', () {
@@ -506,19 +568,7 @@ class _ClipboardHomeState extends State<ClipboardHome> {
                           size: 30,
                         ),
                         const SizedBox(width: 8),
-                        ToolButton(
-                          CupertinoIcons.gear,
-                          '设置',
-                          _settings,
-                          size: 30,
-                        ),
-                        const SizedBox(width: 8),
-                        ToolButton(
-                          CupertinoIcons.info_circle,
-                          '关于',
-                          _about,
-                          size: 30,
-                        ),
+                        _settingsMenu(context),
                       ],
                     ),
                   ),
@@ -635,6 +685,7 @@ class _ClipboardHomeState extends State<ClipboardHome> {
             Expanded(
               child: TextField(
                 controller: search,
+                autofocus: popover,
                 focusNode: searchFocus,
                 onChanged: (_) => setState(() {}),
                 style: const TextStyle(
@@ -663,110 +714,79 @@ class _ClipboardHomeState extends State<ClipboardHome> {
     child: Container(
       decoration: BoxDecoration(
         border: Border(
-          bottom: BorderSide(
-            color: ReplicaMetrics.border(context).withValues(alpha: .072),
-            width: 1,
-          ),
+          bottom: BorderSide(color: ReplicaMetrics.border(context), width: .6),
         ),
       ),
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 9),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Column(
         children: [
           Row(
             children: [
-              Expanded(child: _searchField(context)),
+              Container(
+                padding: const EdgeInsets.all(3),
+                decoration: BoxDecoration(
+                  color: control(context),
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final name in ['history', 'notebook'])
+                      TextButton(
+                        onPressed: () => _switchLibrary(name),
+                        style: TextButton.styleFrom(
+                          minimumSize: const Size(0, 28),
+                          padding: const EdgeInsets.symmetric(horizontal: 9),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          backgroundColor: library == name
+                              ? ReplicaMetrics.page(context)
+                                    .withValues(alpha: .85)
+                              : Colors.transparent,
+                          foregroundColor: library == name
+                              ? ReplicaMetrics.primary(context)
+                              : secondary(context),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                        ),
+                        child: Text(
+                          name == 'history' ? '历史记录' : '记事本',
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
               const SizedBox(width: 8),
+              Text(
+                '$count 条',
+                style: TextStyle(fontSize: 11, color: secondary(context)),
+              ),
+              const Spacer(),
               ToolButton(
                 CupertinoIcons.tray_full,
                 '悬浮中转',
                 () => _open('transfer'),
+                size: 28,
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 4),
               ToolButton(
                 CupertinoIcons.arrow_up_right_square,
                 '打开主窗口',
                 () => _open('main'),
+                size: 28,
               ),
-              const SizedBox(width: 8),
-              ToolButton(CupertinoIcons.power, '退出 SuperClipboard', _quit),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(2),
-                decoration: BoxDecoration(
-                  color: control(context),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Row(
-                  spacing: 2,
-                  children: ['history', 'notebook']
-                      .map(
-                        (v) => SizedBox(
-                          height: 27,
-                          child: TextButton(
-                            onPressed: () => _switchLibrary(v),
-                            style: TextButton.styleFrom(
-                              minimumSize: Size.zero,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                              ),
-                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              foregroundColor: library == v
-                                  ? ReplicaMetrics.primary(context)
-                                  : secondary(context),
-                              backgroundColor: library == v
-                                  ? (isDark(context)
-                                            ? const Color(0xff141a24)
-                                            : Colors.white)
-                                        .withValues(alpha: .88)
-                                  : Colors.transparent,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              textStyle: TextStyle(
-                                fontFamily: ReplicaMetrics.fontFamily,
-                                fontFamilyFallback: ReplicaMetrics.fontFallback,
-                                fontSize: 11,
-                                height: 1,
-                                fontWeight: library == v
-                                    ? FontWeight.w600
-                                    : FontWeight.w400,
-                              ),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  v == 'history'
-                                      ? CupertinoIcons.clock
-                                      : CupertinoIcons.book,
-                                  size: 11,
-                                ),
-                                const SizedBox(width: 5),
-                                Text(v == 'history' ? '历史记录' : '记事本'),
-                              ],
-                            ),
-                          ),
-                        ),
-                      )
-                      .toList(),
-                ),
-              ),
-              const Spacer(),
-              Text(
-                '$count 条',
-                style: TextStyle(
-                  fontFamily: ReplicaMetrics.fontFamily,
-                  fontFamilyFallback: ReplicaMetrics.fontFallback,
-                  fontSize: 11,
-                  color: secondary(context),
-                ),
+              const SizedBox(width: 4),
+              ToolButton(
+                CupertinoIcons.power,
+                '退出 SuperClipboard',
+                _quit,
+                size: 28,
               ),
             ],
           ),
+          const SizedBox(height: 10),
+          SizedBox(height: 36, child: _searchField(context)),
         ],
       ),
     ),
