@@ -35,12 +35,12 @@ try {
   $builtFont = Join-Path $PSScriptRoot 'build/windows/x64/runner/Release/data/flutter_assets/packages/cupertino_icons/assets/CupertinoIcons.ttf'
   if ((Get-FileHash -LiteralPath $sourceFont).Hash -ne (Get-FileHash -LiteralPath $builtFont).Hash) { throw '发布字体不完整，请使用当前脚本重新构建，勿复用旧的裁剪图标构建。' }
   if (-not $SkipChecks) { & (Join-Path $PSScriptRoot 'scripts/test-native.ps1') }
-  $packageName = "SuperClipboard-Windows-x64-v$Version"
+  $packageName = "PocketCube-Windows-x64-v$Version"
   & (Join-Path $PSScriptRoot 'package.ps1') -SkipBuild -PackageName $packageName
   if (-not $?) { throw '免安装包生成失败。' }
   $packagePath = Join-Path $PSScriptRoot "dist/$packageName"
   Invoke-ReleaseCommand $IsccPath @("/DAppVersion=$Version", "/DPackageDir=$packagePath", (Join-Path $PSScriptRoot 'packaging/windows-installer.iss'))
-  $hashPaths = @((Join-Path $PSScriptRoot "dist/SuperClipboard-$Version-windows-x64-setup.exe"), (Join-Path $PSScriptRoot "dist/$packageName.zip"))
+  $hashPaths = @((Join-Path $PSScriptRoot "dist/PocketCube-$Version-windows-x64-setup.exe"), (Join-Path $PSScriptRoot "dist/$packageName.zip"))
   $hashLines = foreach ($hashPath in $hashPaths) { $hash = Get-FileHash -LiteralPath $hashPath -Algorithm SHA256; "$($hash.Hash)  $([IO.Path]::GetFileName($hashPath))" }
   $hashLines | Set-Content -LiteralPath (Join-Path $PSScriptRoot 'dist/SHA256SUMS.txt') -Encoding ascii
   Get-Item -LiteralPath $hashPaths | Select-Object FullName,Length

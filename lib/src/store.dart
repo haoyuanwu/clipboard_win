@@ -722,11 +722,9 @@ class ClipboardStore extends ChangeNotifier {
   }
 
   Future<void> _migrate(String parent) async {
-    final destination = Directory('$parent/SuperClipboard Notebook');
+    final destination = Directory('$parent/口袋Cube Notebook');
     if (await destination.exists()) {
-      throw const FileSystemException(
-        '目标已有 SuperClipboard Notebook 文件夹，请选择其他位置。',
-      );
+      throw const FileSystemException('目标已有 口袋Cube Notebook 文件夹，请选择其他位置。');
     }
     final oldPath = notebookPath;
     final oldNotebook = notebook;

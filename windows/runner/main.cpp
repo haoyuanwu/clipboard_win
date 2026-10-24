@@ -41,7 +41,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   FlutterWindow window(project);
   Win32Window::Point origin(180, 100);
   Win32Window::Size size(440, 640);
-  if (!window.Create(L"SuperClipboard", origin, size)) {
+  if (!window.Create(L"口袋Cube", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);

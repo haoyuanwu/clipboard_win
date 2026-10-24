@@ -1,4 +1,4 @@
-param([switch]$SkipBuild, [ValidatePattern('^[A-Za-z0-9._-]+$')][string]$PackageName = 'SuperClipboard-Windows-x64')
+param([switch]$SkipBuild, [ValidatePattern('^[A-Za-z0-9._-]+$')][string]$PackageName = 'PocketCube-Windows-x64')
 $ErrorActionPreference = 'Stop'
 $packageProject = $PSScriptRoot
 $packageBuild = Join-Path $packageProject 'build/windows/x64/runner/Release'
@@ -9,7 +9,7 @@ if (-not $SkipBuild) {
 }
 if (-not (Test-Path -LiteralPath (Join-Path $packageBuild 'clipboard_win.exe'))) {throw 'Build output missing'}
 New-Item -ItemType Directory -Force -Path $packageDirectory | Out-Null
-Copy-Item -LiteralPath (Join-Path $packageBuild 'clipboard_win.exe') -Destination (Join-Path $packageDirectory 'SuperClipboard.exe') -Force
+Copy-Item -LiteralPath (Join-Path $packageBuild 'clipboard_win.exe') -Destination (Join-Path $packageDirectory 'PocketCube.exe') -Force
 Get-ChildItem -LiteralPath $packageBuild -Filter '*.dll' | Copy-Item -Destination $packageDirectory -Force
 Copy-Item -LiteralPath (Join-Path $packageBuild 'data') -Destination $packageDirectory -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $packageProject 'README.md') -Destination $packageDirectory -Force

@@ -18,8 +18,8 @@ if (-not $CommitMessage) { $CommitMessage = "发布 Windows v${Version}：更新
 if (-not $NotesFile) { $NotesFile = Join-Path $project "docs/release-notes/v$Version.md" }
 if (-not (Test-Path -LiteralPath $NotesFile)) { throw "缺少中文版本说明：$NotesFile" }
 $NotesFile = (Resolve-Path -LiteralPath $NotesFile).Path
-$packageName = "SuperClipboard-Windows-x64-v$Version"
-$installerName = "SuperClipboard-$Version-windows-x64-setup.exe"
+$packageName = "PocketCube-Windows-x64-v$Version"
+$installerName = "PocketCube-$Version-windows-x64-setup.exe"
 $remoteUrl = "https://github.com/$Repository.git"
 if ($Plan) {
   Write-Output "目标公开仓库：https://github.com/$Repository"
@@ -60,7 +60,7 @@ try {
   & gh repo view $Repository --json nameWithOwner --jq .nameWithOwner 2>$null
   if ($LASTEXITCODE -ne 0) {
     if (-not $CreateRepository) { throw '无法访问目标仓库。首次创建时添加 -CreateRepository；也请检查网络和登录权限。' }
-    Invoke-ReleaseCommand gh @('repo','create',$Repository,'--public','--description','SuperClipboard Windows 版｜Flutter 剪贴板历史、独立记事本与悬浮中转站，支持半透明磨砂界面')
+    Invoke-ReleaseCommand gh @('repo','create',$Repository,'--public','--description','口袋Cube Windows 版｜Flutter 剪贴板历史、独立记事本与悬浮中转站，支持半透明磨砂界面')
   }
   $origin = & git remote get-url origin 2>$null
   if ($LASTEXITCODE -ne 0) { Invoke-ReleaseCommand git @('remote','add','origin',$remoteUrl) }

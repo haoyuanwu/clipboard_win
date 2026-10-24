@@ -33,7 +33,7 @@ if ($Pattern) {
   $brushA.Dispose();$brushB.Dispose()
  })
 }
-[GlassCapture]::ShowWindow((Get-ClipboardTestWindow 'SuperClipboard'),0) | Out-Null
+[GlassCapture]::ShowWindow((Get-ClipboardTestWindow '口袋Cube'),0) | Out-Null
 $glassBackground.Show()
 [GlassCapture]::ShowWindow($glassHandle,9) | Out-Null
 [GlassCapture]::SetForegroundWindow($glassHandle) | Out-Null

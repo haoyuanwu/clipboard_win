@@ -1,6 +1,6 @@
-# SuperClipboard for Windows
+# 口袋Cube for Windows
 
-<img src="assets/app_logo.png" width="96" alt="SuperClipboard 图标">
+<img src="assets/app_logo.png" width="96" alt="口袋Cube 图标">
 
 **让每一次复制，都有迹可循。**
 
@@ -14,8 +14,8 @@
 
 | 文件 | 使用方式 |
 | --- | --- |
-| `SuperClipboard-<版本>-windows-x64-setup.exe` | 中文安装向导，安装到当前用户目录，无需管理员权限，提供开始菜单入口和卸载功能 |
-| `SuperClipboard-Windows-x64-v<版本>.zip` | 免安装版，完整解压后打开 `SuperClipboard.exe`，保留同目录的 DLL 和 data 文件夹 |
+| `PocketCube-<版本>-windows-x64-setup.exe` | 中文安装向导，安装到当前用户目录，无需管理员权限，提供开始菜单入口和卸载功能 |
+| `PocketCube-Windows-x64-v<版本>.zip` | 免安装版，完整解压后打开 `PocketCube.exe`，保留同目录的 DLL 和 data 文件夹 |
 | `SHA256SUMS.txt` | 下载文件的 SHA-256 校验值 |
 
 面向 Windows 10/11 x64，当前验证环境为 Windows 11 x64。升级前请从托盘退出旧版。当前发布包未做商业代码签名。卸载程序不会主动删除个人历史数据。
@@ -65,7 +65,7 @@ Windows 关闭系统“透明效果”时，桌面毛玻璃会使用较实的材
 
 ## 存储
 
-默认数据目录：`%APPDATA%\SuperClipboard`。
+默认数据目录：`%APPDATA%\SuperClipboard`。口袋Cube 沿用旧版数据目录，升级后继续使用原有历史、记事本和设置。
 
 - `state.json`：历史、设置和共享状态，写入时保留 `.bak`。
 - `History/`：应用保存的历史图片；历史文件记录继续引用原始文件。

@@ -13,7 +13,7 @@ public static class ClipboardHotkeyProbe {
  }
 }
 "@
-$tests = @(@{key=67;title='SuperClipboard 快捷历史'},@{key=86;title='悬浮中转'})
+$tests = @(@{key=67;title='口袋Cube 快捷历史'},@{key=86;title='悬浮中转'})
 foreach ($test in $tests) {
  $window = Get-ClipboardTestWindow $test.title
  if ($window -ne [IntPtr]::Zero) { [ClipboardHotkeyProbe]::SendMessage($window,0x10,[IntPtr]::Zero,[IntPtr]::Zero) | Out-Null }

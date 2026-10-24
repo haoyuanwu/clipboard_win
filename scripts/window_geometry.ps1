@@ -12,7 +12,7 @@ public static class ClipboardGeometry {
 }
 "@
 [ClipboardGeometry]::SetProcessDpiAwarenessContext([IntPtr](-4)) | Out-Null
-foreach($geometryTitle in @('SuperClipboard','SuperClipboard 快捷历史','悬浮中转')) {
+foreach($geometryTitle in @('口袋Cube','口袋Cube 快捷历史','悬浮中转')) {
  $geometryHandle=(Get-ClipboardTestWindow $geometryTitle)
  $geometryWindow=New-Object ClipboardGeometry+RECT; $geometryClient=New-Object ClipboardGeometry+RECT; $geometryChild=New-Object ClipboardGeometry+RECT
  [ClipboardGeometry]::GetWindowRect($geometryHandle,[ref]$geometryWindow) | Out-Null

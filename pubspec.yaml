@@ -1,7 +1,7 @@
 name: clipboard_win
-description: SuperClipboard for Windows, built with Flutter.
+description: 口袋Cube for Windows, built with Flutter.
 publish_to: none
-version: 1.3.3+4
+version: 1.3.4+5
 environment:
   sdk: ^3.13.5
 dependencies:

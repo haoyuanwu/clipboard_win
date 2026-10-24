@@ -103,7 +103,7 @@ void main() {
     await store.command({
       'op': 'ingest',
       'data': {
-        'text': 'SuperClipboard\n文字、图片、文件、视频，随时找回。',
+        'text': '口袋Cube\n文字、图片、文件、视频，随时找回。',
         'source': 'Microsoft Edge',
         'tint': 0xff159b87,
       },
@@ -467,9 +467,9 @@ void main() {
     expect(find.text('历史记录'), findsOneWidget);
     expect(find.text('2 条'), findsOneWidget);
     expect(find.byType(EntryDetail), findsNothing);
-    await tester.tap(find.byTooltip('退出 SuperClipboard'));
+    await tester.tap(find.byTooltip('退出 口袋Cube'));
     await tester.pumpAndSettle();
-    expect(find.text('退出 SuperClipboard？'), findsOneWidget);
+    expect(find.text('退出 口袋Cube？'), findsOneWidget);
     final quitSurface = find.descendant(
       of: find.byType(Dialog),
       matching: find.byType(MacGlassSurface),

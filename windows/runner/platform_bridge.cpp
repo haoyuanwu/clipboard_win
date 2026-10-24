@@ -265,7 +265,7 @@ void TrayIcon(HWND hwnd) {
   tray = {}; tray.cbSize = sizeof(tray); tray.hWnd = hwnd; tray.uID = 1;
   tray.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP; tray.uCallbackMessage = kTray;
   tray.hIcon = TrayThemeIcon();
-  wcscpy_s(tray.szTip, L"SuperClipboard");
+  wcscpy_s(tray.szTip, L"口袋Cube");
   Shell_NotifyIcon(NIM_ADD, &tray);
   tray_visibility_attempts = 0;
   SetTimer(hwnd, kTrayVisibility, 1000, nullptr);
@@ -351,7 +351,7 @@ PlatformBridge::PlatformBridge(flutter::BinaryMessenger* messenger, HWND window,
     // An independent top-level window stays available when all Flutter windows
     // are hidden or minimized. Keep its timer independent of their lifecycle.
     receiver_window = CreateWindowEx(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-      wc.lpszClassName, L"SuperClipboard 文件收纳", WS_POPUP, 0, 0, 190, 90, nullptr, nullptr, wc.hInstance, nullptr);
+      wc.lpszClassName, L"口袋Cube 文件收纳", WS_POPUP, 0, 0, 190, 90, nullptr, nullptr, wc.hInstance, nullptr);
     if (receiver_window) {
       const DWM_WINDOW_CORNER_PREFERENCE round = DWMWCP_ROUND;
       DwmSetWindowAttribute(receiver_window, DWMWA_WINDOW_CORNER_PREFERENCE, &round, sizeof(round));
@@ -598,7 +598,7 @@ void PlatformBridge::ShowWindowForMode(const std::string& mode) {
     flutter::DartProject project(L"data"); project.set_dart_entrypoint_arguments({mode});
     auto window = std::make_unique<FlutterWindow>(project, mode);
     POINT cursor; GetCursorPos(&cursor);
-    window->Create(mode == "transfer" ? L"悬浮中转" : L"SuperClipboard 快捷历史",
+    window->Create(mode == "transfer" ? L"悬浮中转" : L"口袋Cube 快捷历史",
       Win32Window::Point(200, 100), Win32Window::Size(mode == "transfer" ? 350 : 390, 520));
     extra_windows.push_back(std::move(window));
   }
@@ -684,12 +684,12 @@ std::optional<LRESULT> PlatformBridge::Handle(UINT message, WPARAM wp, LPARAM lp
       else if (lp == WM_RBUTTONUP) {
         HMENU menu = CreatePopupMenu();
         AppendMenu(menu, MF_STRING, 1, L"打开主窗口"); AppendMenu(menu, MF_STRING, 2, L"悬浮中转");
-        AppendMenu(menu, MF_SEPARATOR, 0, nullptr); AppendMenu(menu, MF_STRING, 3, L"退出 SuperClipboard…");
+        AppendMenu(menu, MF_SEPARATOR, 0, nullptr); AppendMenu(menu, MF_STRING, 3, L"退出 口袋Cube…");
         POINT p; GetCursorPos(&p); SetForegroundWindow(window_);
         auto cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, p.x, p.y, 0, window_, nullptr);
         DestroyMenu(menu);
         if (cmd == 1) ShowWindowForMode("main"); else if (cmd == 2) ShowWindowForMode("transfer");
-        else if (cmd == 3 && MessageBox(window_, L"退出后将停止记录剪贴板内容。", L"退出 SuperClipboard？", MB_OKCANCEL | MB_ICONQUESTION) == IDOK) {
+        else if (cmd == 3 && MessageBox(window_, L"退出后将停止记录剪贴板内容。", L"退出 口袋Cube？", MB_OKCANCEL | MB_ICONQUESTION) == IDOK) {
           quitting = true; PostQuitMessage(0);
         }
       }

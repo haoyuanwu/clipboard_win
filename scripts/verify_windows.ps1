@@ -20,7 +20,7 @@ public static class ClipboardUi {
 }
 "@
 [ClipboardUi]::SetProcessDpiAwarenessContext([IntPtr](-4)) | Out-Null
-$uiMain=(Get-ClipboardTestWindow 'SuperClipboard')
+$uiMain=(Get-ClipboardTestWindow '口袋Cube')
 if ($uiMain -eq [IntPtr]::Zero) {throw 'Main window missing'}
 [ClipboardUi]::ShowWindow($uiMain,9) | Out-Null
 $uiRect = New-Object ClipboardUi+RECT
@@ -32,10 +32,10 @@ $uiTransfer=(Get-ClipboardTestWindow '悬浮中转')
 if ($uiTransfer -eq [IntPtr]::Zero) {throw 'Transfer window missing'}
 [ClipboardUi]::SendMessage($uiMain,0x801f,[IntPtr]::Zero,[IntPtr]0x202) | Out-Null
 Start-Sleep -Milliseconds 1400
-$uiPopover=(Get-ClipboardTestWindow 'SuperClipboard 快捷历史')
+$uiPopover=(Get-ClipboardTestWindow '口袋Cube 快捷历史')
 if ($uiPopover -eq [IntPtr]::Zero) {throw 'Popover missing'}
 Write-Output 'Main, transfer and tray popover windows created successfully'
-& ./scripts/capture_window.ps1 -Output docs/screenshots/windows-popover.png -Title 'SuperClipboard 快捷历史'
+& ./scripts/capture_window.ps1 -Output docs/screenshots/windows-popover.png -Title '口袋Cube 快捷历史'
 [ClipboardUi]::ShowWindow($uiMain,9) | Out-Null
 & ./scripts/capture_window.ps1 -Output docs/screenshots/windows-main.png
 & ./scripts/capture_window.ps1 -Output docs/screenshots/windows-transfer.png -Title '悬浮中转'

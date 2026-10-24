@@ -1,4 +1,4 @@
-param([string]$Output = 'docs/screenshots/windows-main.png', [string]$Title = 'SuperClipboard')
+param([string]$Output = 'docs/screenshots/windows-main.png', [string]$Title = '口袋Cube')
 . (Join-Path $PSScriptRoot 'window_target.ps1')
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
@@ -15,7 +15,7 @@ public static class WindowCapture {
 "@
 [WindowCapture]::SetProcessDpiAwarenessContext([IntPtr](-4)) | Out-Null
 $clipboardWindow = (Get-ClipboardTestWindow $Title)
-if ($clipboardWindow -eq [IntPtr]::Zero) { throw 'SuperClipboard window not found' }
+if ($clipboardWindow -eq [IntPtr]::Zero) { throw '口袋Cube window not found' }
 $clipboardRect = New-Object WindowCapture+RECT
 [WindowCapture]::GetWindowRect($clipboardWindow, [ref]$clipboardRect) | Out-Null
 $clipboardBitmap = [Drawing.Bitmap]::new($clipboardRect.right - $clipboardRect.left, $clipboardRect.bottom - $clipboardRect.top)

@@ -27,7 +27,7 @@ class SuperClipboardApp extends StatelessWidget {
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: store,
     builder: (context, _) => MaterialApp(
-      title: 'SuperClipboard',
+      title: '口袋Cube',
       debugShowCheckedModeBanner: false,
       themeMode: switch (store.settings['appearance']) {
         'dark' => ThemeMode.dark,
@@ -527,11 +527,7 @@ class _ClipboardHomeState extends State<ClipboardHome> {
     },
     itemBuilder: (_) => [
       const PopupMenuItem(value: 'settings', height: 30, child: Text('设置…')),
-      const PopupMenuItem(
-        value: 'about',
-        height: 30,
-        child: Text('关于 SuperClipboard'),
-      ),
+      const PopupMenuItem(value: 'about', height: 30, child: Text('关于 口袋Cube')),
     ],
     child: SizedBox(
       width: 30,
@@ -576,7 +572,7 @@ class _ClipboardHomeState extends State<ClipboardHome> {
       children: [
         if (store.windowsStyle) ...[
           WindowsTitleBar(
-            title: '${library == 'notebook' ? '记事本' : '剪贴板'} - SuperClipboard',
+            title: '${library == 'notebook' ? '记事本' : '剪贴板'} - 口袋Cube',
             enabled: store.usePlatform,
             maximized: store.windowMaximized,
           ),
@@ -851,12 +847,7 @@ class _ClipboardHomeState extends State<ClipboardHome> {
                 size: 28,
               ),
               const SizedBox(width: 4),
-              ToolButton(
-                CupertinoIcons.power,
-                '退出 SuperClipboard',
-                _quit,
-                size: 28,
-              ),
+              ToolButton(CupertinoIcons.power, '退出 口袋Cube', _quit, size: 28),
             ],
           ),
           const SizedBox(height: 10),
@@ -1128,7 +1119,7 @@ class _ClipboardHomeState extends State<ClipboardHome> {
             Image.asset('assets/app_logo.png', width: 80, height: 80),
             const SizedBox(height: 12),
             const Text(
-              'SuperClipboard',
+              '口袋Cube',
               style: TextStyle(
                 fontFamily: ReplicaMetrics.fontFamily,
                 fontFamilyFallback: ReplicaMetrics.fontFallback,
@@ -1183,7 +1174,7 @@ class _ClipboardHomeState extends State<ClipboardHome> {
                   ),
                   const SizedBox(height: 16),
                   const Text(
-                    '退出 SuperClipboard？',
+                    '退出 口袋Cube？',
                     style: TextStyle(
                       fontFamily: ReplicaMetrics.fontFamily,
                       fontFamilyFallback: ReplicaMetrics.fontFallback,
